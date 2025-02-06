@@ -1,0 +1,27 @@
+{
+    "name": "xcshowmap",
+    "version": "1.0",
+    "manifest_version": 3,
+    "description": "Generate and display traffic flow diagrams from Volterra console API responses.",
+    "permissions": [
+        "storage"
+    ],
+    "host_permissions": [
+        "https://*.console.ves.volterra.io/*"
+    ],
+    "content_scripts": [
+        {
+            "matches": [
+                "https://*.console.ves.volterra.io/api/config/namespaces/*/http_loadbalancers"
+            ],
+            "js": [
+                "content.js"
+            ],
+            "run_at": "document_end"
+        }
+    ],
+    "action": {
+        "default_popup": "popup.html",
+        "default_icon": "icon.png"
+    }
+}
