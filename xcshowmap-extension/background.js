@@ -111,9 +111,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             });
         }
 
-        console.log("🖼️ Generated Mermaid Diagram:\n", mermaidDiagram);
+        console.log("🖼️ **Generated Mermaid Diagram:**\n", mermaidDiagram);
 
-        // Send the diagram back to the popup or content script
+        // ✅ Encode the diagram and open a new tab
+        const encodedDiagram = encodeURIComponent(mermaidDiagram);
+        const diagramUrl = `chrome-extension://${chrome.runtime.id}/mermaid.html?diagram=${encodedDiagram}`;
+
+        chrome.tabs.create({ url: diagramUrl });
+
         sendResponse({ mermaidDiagram });
     }
 });
