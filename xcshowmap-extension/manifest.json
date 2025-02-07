@@ -4,7 +4,9 @@
     "manifest_version": 3,
     "description": "Generate and display traffic flow diagrams from Volterra console API responses.",
     "permissions": [
-        "storage"
+        "storage",
+        "contextMenus",
+        "activeTab"
     ],
     "host_permissions": [
         "https://*.console.ves.volterra.io/*"
