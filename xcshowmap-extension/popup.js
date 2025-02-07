@@ -1,29 +1,104 @@
-document.addEventListener("DOMContentLoaded", function () {
-    const diagramContainer = document.getElementById("diagram");
+document.addEventListener("DOMContentLoaded", () => {
 
-    chrome.runtime.onMessage.addListener((message) => {
-        if (message.type === "apiData") {
-            console.log("Received API Data:", message.data);
-            const mermaidCode = generateMermaid(message.data);
-            diagramContainer.innerHTML = `<pre class="mermaid">${mermaidCode}</pre>`;
-            mermaid.init(undefined, diagramContainer);
-        }
+    const loadBalancerSelect = document.getElementById("loadBalancerSelect");
+    const generateButton = document.getElementById("generateBtn");
+    let loadBalancers = {};
+
+    generateButton.disabled = true;
+    generateButton.style.backgroundColor = "#ccc";
+
+    // Refresh popup when the active tab changes
+    chrome.tabs.onActivated.addListener(() => {
+        console.log("🔄 Active tab changed, refreshing popup...");
+        location.reload();
     });
 
-    function generateMermaid(data) {
-        let mermaidDiagram = "graph LR;\n";
-        mermaidDiagram += `  User -->|SNI| LoadBalancer;\n`;
+    chrome.runtime.sendMessage({ type: "getLoadBalancers" }, (response) => {
+        if (chrome.runtime.lastError) {
+            showErrorNotification("Runtime Error: ${ chrome.runtime.lastError.message }");
+            return;
+        }
 
-        data.items.forEach(item => {
-            const lbName = item.name;
-            mermaidDiagram += `  LoadBalancer -->|${lbName}| ${lbName}_Routes;\n`;
+        if (!response?.loadBalancers?.length) {
+            showErrorNotification('No load balancers found. Refresh the page or check access.');
+            return;
+        }
 
-            item.get_spec.default_route_pools.forEach(pool => {
-                const poolName = pool.pool.name;
-                mermaidDiagram += `  ${lbName}_Routes -->|Origin Pool| ${poolName};\n`;
-            });
+        console.log("📨 Load Balancers Received:", response.loadBalancers);
+
+        response.loadBalancers.forEach(lb => {
+            loadBalancers[lb.name] = lb;
         });
 
-        return mermaidDiagram;
-    }
+        loadBalancerSelect.innerHTML = "";
+        const defaultOption = document.createElement("option");
+        defaultOption.value = "";
+        defaultOption.textContent = "Select a Load Balancer...";
+        defaultOption.disabled = true;
+        defaultOption.selected = true;
+        loadBalancerSelect.appendChild(defaultOption);
+
+        response.loadBalancers.forEach(lb => {
+            const option = document.createElement("option");
+            option.value = lb.name;
+            option.textContent = lb.name;
+            option.setAttribute("data-namespace", lb.namespace);
+            loadBalancerSelect.appendChild(option);
+        });
+
+        console.log("✅ Load Balancers Populated in Dropdown.");
+    });
+
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const tabId = tabs[0]?.id;
+        chrome.runtime.sendMessage({ action: "getCsrfToken", tabId }, (response) => {
+            console.log("🔑 CSRF Token for Active Tab:", response.csrfToken);
+        });
+
+        chrome.runtime.sendMessage({ action: "getNamespace", tabId }, (response) => {
+            console.log("📌 Namespace for Active Tab:", response.namespace);
+        });
+    });
+
+    loadBalancerSelect.addEventListener("change", () => {
+        generateButton.disabled = !loadBalancerSelect.value;
+        generateButton.style.backgroundColor = loadBalancerSelect.value ? "green" : "#ccc";
+    });
+
+    generateButton.addEventListener("click", () => {
+        const selectedLB = loadBalancerSelect.value;
+
+        if (!selectedLB || !loadBalancers[selectedLB]) {
+            showErrorNotification("Load Balancer not found in stored data");
+            return;
+        }
+
+        const lbData = loadBalancers[selectedLB];
+
+        console.log("📨 Sending Load Balancer Data for Mermaid:", lbData);
+        console.log("📨 Sending Load Balancer Name:", selectedLB);
+
+        chrome.runtime.sendMessage({
+            type: "generateMermaid",
+            loadBalancer: lbData,
+            lbName: selectedLB
+        }, (mermaidResponse) => {
+            if (mermaidResponse && mermaidResponse.mermaidDiagram) {
+                console.log("🖼️ Received Mermaid Diagram:", mermaidResponse.mermaidDiagram);
+            } else {
+                showErrorNotification("Failed to generate Mermaid Diagram");
+            }
+        });
+    });
+
 });
+
+chrome.tabs.onActivated.addListener(() => {
+    console.log("🔄 Active tab changed, reloading popup...");
+    location.reload();
+});
+
+// Error notification function
+function showErrorNotification(message) {
+    alert("❌ ${ message }");
+}

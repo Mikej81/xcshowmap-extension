@@ -1,20 +1,40 @@
 {
-    "name": "xcshowmap",
+    "name": "XC Service Flow Mapper",
     "version": "1.0",
     "manifest_version": 3,
     "description": "Generate and display traffic flow diagrams from Volterra console API responses.",
     "permissions": [
+        "debugger",
         "storage",
         "contextMenus",
-        "activeTab"
+        "activeTab",
+        "webRequest"
     ],
     "host_permissions": [
-        "https://*.console.ves.volterra.io/*"
+        "https://*.console.ves.volterra.io/*",
+        "https://*.console.ves.volterra.io/api/config/namespaces/*",
+        "https://*.console.ves.volterra.io/managed_tenant/*"
+    ],
+    "background": {
+        "service_worker": "background.js"
+    },
+    "web_accessible_resources": [
+        {
+            "resources": [
+                "mermaid.min.js",
+                "mermaid-init.js",
+                "mermaid.html"
+            ],
+            "matches": [
+                "chrome-extension://*/*",
+                "http://*/*"
+            ]
+        }
     ],
     "content_scripts": [
         {
             "matches": [
-                "https://*.console.ves.volterra.io/api/config/namespaces/*/http_loadbalancers"
+                "https://*.console.ves.volterra.io/web/workspaces/multi-cloud-app-connect/namespaces/*/manage/load_balancers/http_loadbalancers*"
             ],
             "js": [
                 "content.js"
@@ -25,5 +45,8 @@
     "action": {
         "default_popup": "popup.html",
         "default_icon": "icon.png"
+    },
+    "content_security_policy": {
+        "extension_pages": "script-src 'self'; object-src 'self';"
     }
 }
