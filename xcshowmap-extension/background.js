@@ -4,6 +4,64 @@ chrome.runtime.onInstalled.addListener(() => {
 
 let capturedUrls = []; // Store captured URLs
 
+class APIResponse {
+    constructor(lbObject) {
+        if (!lbObject || typeof lbObject !== "object") {
+            throw new Error("Invalid API response: Load Balancer object is missing.");
+        }
+
+        console.log("✅ Processing Load Balancer:", lbObject.name || "UnknownLB");
+
+        this.lbName = lbObject.name || "UnknownLB";
+        this.namespace = lbObject.namespace || "UnknownNamespace";
+        this.domains = lbObject.get_spec?.domains || [];
+        this.appFirewall = lbObject.get_spec?.app_firewall?.name || null;
+
+        // ✅ Store Default Route Pools properly
+        this.defaultRoutePools = lbObject.get_spec?.default_route_pools?.map(pool => ({
+            name: pool.pool.name
+        })) || [];
+
+        this.activeServicePolicies = lbObject.get_spec?.active_service_policies?.policies?.map(policy => ({
+            namespace: policy.namespace,
+            name: policy.name
+        })) || [];
+
+        this.routes = this.parseRoutes(lbObject.get_spec?.routes || []);
+    }
+
+    parseRoutes(routes) {
+        return routes.map(route => {
+            if (route.simple_route) {
+                return {
+                    type: "simple",
+                    path: route.simple_route.path.prefix || route.simple_route.path.regex || "/",
+                    headers: route.simple_route.headers || [],
+                    originPools: route.simple_route.origin_pools?.map(pool => pool.pool.name) || [],
+                    appFirewall: route.simple_route.advanced_options?.app_firewall?.name || null,
+                    inheritedWAF: route.simple_route.advanced_options?.inherited_waf ? "Inherited" : null
+                };
+            } else if (route.redirect_route) {
+                return {
+                    type: "redirect",
+                    path: route.redirect_route.path.prefix,
+                    headers: route.redirect_route.headers || [],
+                    hostRedirect: route.redirect_route.route_redirect.host_redirect,
+                    pathRedirect: route.redirect_route.route_redirect.path_redirect
+                };
+            } else if (route.direct_response_route) {
+                return {
+                    type: "direct_response",
+                    path: route.direct_response_route.path.prefix,
+                    responseCode: route.direct_response_route.route_direct_response.response_code,
+                    responseBody: route.direct_response_route.route_direct_response.response_body
+                };
+            }
+            return null;
+        }).filter(route => route !== null);
+    }
+}
+
 chrome.webRequest.onCompleted.addListener(
     function (details) {
         if (details.url) {
@@ -38,6 +96,7 @@ chrome.webRequest.onCompleted.addListener(
 
 // Listener for retrieving stored URLs
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+
     if (message.action === "getCapturedUrls") {
         chrome.storage.local.get("urls", (data) => {
             console.log("📨 Sending captured URLs:", data.urls);
@@ -63,64 +122,104 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.type === "generateMermaid") {
-        const lbData = message.loadBalancer;
+        const lbObject = message.loadBalancer;
 
-        console.log("📊 Processing Load Balancer Data for Mermaid:", lbData);
-
-        // Extract necessary information
-        const lbName = lbData.metadata.name;
-        const domains = lbData.get_spec.domains || [];
-        const servicePolicy = "ServicePolicy"; // Placeholder, adjust as needed
-        const routes = lbData.get_spec.routes || [];
-        const defaultRoutePools = lbData.get_spec.default_route_pools || [];
-
-        // Start building the Mermaid diagram flow
-        let mermaidDiagram = `graph LR;\n`;
-        mermaidDiagram += `  User -->|Traffic| ${lbName};\n`;
-
-        // Connect Load Balancer to Domains
-        domains.forEach(domain => {
-            mermaidDiagram += `  ${lbName} -->|Hosts| ${domain};\n`;
-        });
-
-        // Connect Domains to Service Policy (placeholder for now)
-        domains.forEach(domain => {
-            mermaidDiagram += `  ${domain} -->|Evaluates| ${servicePolicy};\n`;
-        });
-
-        // Connect Service Policy to Routes
-        routes.forEach((route, index) => {
-            const routeName = `Route${index + 1}`;
-            mermaidDiagram += `  ${servicePolicy} -->|Matches| ${routeName};\n`;
-
-            // Connect Routes to Origin Pools
-            if (route.simple_route && route.simple_route.origin_pools) {
-                route.simple_route.origin_pools.forEach((pool, poolIndex) => {
-                    const originPoolName = pool.pool.name;
-                    mermaidDiagram += `  ${routeName} -->|Forwards| ${originPoolName};\n`;
-                });
-            }
-        });
-
-        // If no explicit routes, connect Service Policy to Default Route
-        if (routes.length === 0 && defaultRoutePools.length > 0) {
-            mermaidDiagram += `  ${servicePolicy} -->|Default Route| DefaultRoute;\n`;
-            defaultRoutePools.forEach((pool, poolIndex) => {
-                const originPoolName = pool.pool.name;
-                mermaidDiagram += `  DefaultRoute -->|Forwards| ${originPoolName};\n`;
-            });
+        if (!lbObject) {
+            console.error("❌ Load Balancer data is missing.");
+            return;
         }
 
-        console.log("🖼️ **Generated Mermaid Diagram:**\n", mermaidDiagram);
+        console.log("📊 Processing Load Balancer:", lbObject.name);
+        console.log("🔍 Raw Load Balancer JSON Data:", lbObject);
 
-        // ✅ Encode the diagram and open a new tab
-        const encodedDiagram = encodeURIComponent(mermaidDiagram);
-        const diagramUrl = `chrome-extension://${chrome.runtime.id}/mermaid.html?diagram=${encodedDiagram}`;
+        try {
+            const lb = new APIResponse(lbObject);
 
-        chrome.tabs.create({ url: diagramUrl });
+            let mermaidDiagram = `graph LR;\n`;
 
-        sendResponse({ mermaidDiagram });
+            // 🔹 Connect the User to each Domain
+            lb.domains.forEach(domain => {
+                mermaidDiagram += `  User --> ${domain};\n`;
+            });
+
+            // 🔹 Connect Domains to ServicePolicies
+            const servicePolicyBox = lb.activeServicePolicies.length > 0
+                ? `"**Service Policies**<br>${lb.activeServicePolicies.map(policy => policy.name).join("<br>")}"`
+                : `"**Service Policies**<br>None Configured"`;
+
+            // // 🔹 Connect Domains to Service Policies
+            lb.domains.forEach(domain => {
+                mermaidDiagram += `  ${domain} --> ServicePolicies[${servicePolicyBox}];\n`;
+            });
+
+            // 🔹 Add a WAF box if configured
+            if (lb.appFirewall) {
+                const wafBox = `"**WAF**<br>${lb.appFirewall}"`;
+                mermaidDiagram += `  ServicePolicies --> WAF[${wafBox}];\n`;
+                mermaidDiagram += `  WAF --> Routes;\n`;  // WAF sits between ServicePolicies and Routes
+            } else {
+                mermaidDiagram += `  ServicePolicies --> Routes;\n`; // No WAF, ServicePolicies links directly to Routes
+            }
+
+            // 🔹 Create a Routes box
+            mermaidDiagram += `  Routes["**Routes**"];\n`;
+
+            // 🔹 Process Default Route Pool (if exists)
+            if (lb.defaultRoutePools.length > 0) {
+                mermaidDiagram += `  Routes --> DefaultRoute["**Default Route Pool**"];\n`;
+                lb.defaultRoutePools.forEach(pool => {
+                    mermaidDiagram += `  DefaultRoute --> Pool["${pool.name}"];`; // ✅ Fixed by accessing `name`
+                });
+            }
+
+            // 🔹 Process Individual Routes
+            lb.routes.forEach((route, index) => {
+                const routeLabel = route.type === "redirect" ? `RedirectRoute${index + 1}` : `Route${index + 1}`;
+
+                // 🔹 Extract Path and Headers
+                const path = route.path || "/";
+                const headers = route.headers?.map(header => `${header.name}=${header.value}`).join("<br>") || "None";
+
+                // 🔹 Construct Route Box with Path and Headers
+                const routeBox = route.type === "redirect"
+                    ? `"**Redirect Route**<br>Path: ${path}<br>Header: ${headers}"`
+                    : `"**Route**<br>Path: ${path}<br>Header: ${headers}"`;
+
+                mermaidDiagram += `  Routes --> ${routeLabel}[${routeBox}];\n`;
+
+                // 🔹 Handle Simple Routes
+                if (route.type === "simple") {
+                    route.originPools.forEach(pool => {
+                        mermaidDiagram += `  ${routeLabel} --> Pool["${pool}"];\n`;
+                    });
+                }
+
+                // 🔹 Handle Redirect Routes
+                else if (route.type === "redirect") {
+                    mermaidDiagram += `  ${routeLabel} -->|Redirects to| Redirect["${route.hostRedirect}${route.pathRedirect}"];`;
+                }
+
+                // 🔹 Handle Direct Response Routes
+                else if (route.type === "direct_response") {
+                    const escapedResponse = route.responseBody.replace(/"/g, "'"); // Replace quotes
+                    mermaidDiagram += `  ${routeLabel} -->|Returns ${route.responseCode}| Response["${escapedResponse}"];`;
+                }
+            });
+
+            console.log("🖼️ **Generated Mermaid Diagram:**\n", mermaidDiagram);
+
+            // ✅ Encode the diagram and open a new tab
+            const encodedDiagram = encodeURIComponent(mermaidDiagram);
+            const diagramUrl = `chrome-extension://${chrome.runtime.id}/mermaid.html?diagram=${encodedDiagram}`;
+
+            chrome.tabs.create({ url: diagramUrl });
+
+            sendResponse({ mermaidDiagram });
+        } catch (error) {
+            console.error("❌ Error in generating Mermaid Diagram:", error);
+        }
     }
+
 });
 
 
@@ -141,32 +240,109 @@ function attachDebugger() {
     });
 }
 
-// Helper function for Mermaid generation
-async function handleMermaidGeneration(message, sendResponse) {
+
+// Enhanced diagram generation
+function generateMermaidDiagram(lb) {
     try {
-        if (!message.loadBalancer) {
-            throw new Error("Load Balancer data is missing");
+        let diagram = `graph LR;\n`;
+        const sanitize = (str) => str.replace(/[^a-zA-Z0-9]/g, '_');
+
+        // User to Domains
+        lb.domains.forEach(domain => {
+            const safeDomain = sanitize(domain);
+            diagram += `  User --> ${safeDomain}["${domain}"];\n`;
+        });
+
+        // Service Policies
+        const policyBox = lb.activeServicePolicies.length > 0
+            ? `"**Service Policies**<br>${lb.activeServicePolicies.map(p => p.name).join("<br>")}"`
+            : `"**Service Policies**<br>None"`;
+        lb.domains.forEach(domain => {
+            const safeDomain = sanitize(domain);
+            diagram += `  ${safeDomain} --> ServicePolicies[${policyBox}];\n`;
+        });
+
+        // WAF and Routes
+        if (lb.appFirewall) {
+            diagram += `  ServicePolicies --> WAF["**WAF**<br>${lb.appFirewall}"];\n`;
+            diagram += `  WAF --> Routes;\n`;
+        } else {
+            diagram += `  ServicePolicies --> Routes;\n`;
+        }
+        diagram += `  Routes["**Routes**"];\n`;
+
+        // Default Route Pool
+        if (lb.defaultRoutePools.length) {
+            diagram += `  Routes --> DefaultRoute["**Default Route Pool**"];\n`;
+            lb.defaultRoutePools.forEach(pool => {
+                const safePoolName = sanitize(pool.name);
+                diagram += `  DefaultRoute --> ${safePoolName}["${pool.name}"];\n`;
+            });
         }
 
-        const lb = new APIResponse(message.loadBalancer);
-        const mermaidDiagram = generateMermaidDiagram(lb);
+        // Routes
+        const processedPools = new Set();
+        lb.routes.forEach((route, i) => {
+            const routeId = `Route_${i + 1}`;
+            const label = route.type === "redirect" ? `RedirectRoute_${i + 1}` : routeId;
+            const box = route.type === "redirect"
+                ? `"**Redirect Route**<br>${route.path}"`
+                : `"**Route**<br>${route.path}"`;
+            diagram += `  Routes --> ${label}[${box}];\n`;
 
-        // Create new tab with diagram
-        const encodedDiagram = encodeURIComponent(mermaidDiagram);
-        const diagramUrl = `chrome-extension://${chrome.runtime.id}/mermaid.html?diagram=${encodedDiagram}`;
-        await chrome.tabs.create({ url: diagramUrl });
+            if (route.type === "simple") {
+                route.originPools.forEach(pool => {
+                    const safePoolName = sanitize(pool);
+                    if (!processedPools.has(pool)) {
+                        processedPools.add(pool);
+                        diagram += `  ${label} --> ${safePoolName}["${pool}"];\n`;
+                    }
+                });
+            } else if (route.type === "redirect") {
+                const target = `${route.hostRedirect}${route.pathRedirect}`;
+                diagram += `  ${label} --> Redirect_${i}["${target}"];\n`;
+            } else if (route.type === "direct_response") {
+                const response = route.responseBody.replace(/"/g, "'");
+                diagram += `  ${label} -->|${route.responseCode}| Response_${i}["${response}"];\n`;
+            }
+        });
 
-        sendResponse({ mermaidDiagram });
+        return diagram;
     } catch (error) {
-        console.error("❌ Error generating diagram:", error);
-        sendResponse({ error: error.message });
+        console.error("❌ Diagram generation error:", error);
+        throw new Error(`Failed to generate diagram: ${error.message}`);
     }
 }
 
-// Helper function for generating Mermaid diagram
-function generateMermaidDiagram(lb) {
-    // ... Your existing Mermaid diagram generation logic ...
+// Enhanced Mermaid generation handler
+async function handleMermaidGeneration(message, sendResponse) {
+    try {
+        console.log("🎨 Generating Mermaid diagram...");
+        const lb = new APIResponse(message.loadBalancer);
+        const diagram = generateMermaidDiagram(lb);
+        if (!diagram) {
+            throw new Error("Failed to generate diagram content");
+        }
+        const url = `chrome-extension://${chrome.runtime.id}/mermaid.html?diagram=${encodeURIComponent(diagram)}`;
+        chrome.tabs.create({ url }, (tab) => {
+            if (chrome.runtime.lastError) {
+                console.error("❌ Error creating tab for diagram:", chrome.runtime.lastError.message);
+            }
+        });
+        console.log("✅ Diagram generated successfully");
+        sendResponse({
+            success: true,
+            mermaidDiagram: diagram
+        });
+    } catch (error) {
+        console.error("❌ Mermaid generation error:", error);
+        sendResponse({
+            success: false,
+            error: error.message
+        });
+    }
 }
+
 
 // Capture network requests from debugger (fallback)
 chrome.debugger.onEvent.addListener((source, method, params) => {
