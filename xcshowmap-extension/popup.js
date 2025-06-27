@@ -110,6 +110,18 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    // Download debug logs button
+    document.getElementById("downloadLogsBtn").addEventListener("click", () => {
+        chrome.runtime.sendMessage({ action: "downloadLogs" }, (response) => {
+            if (response?.success) {
+                console.log("✅ Debug logs download initiated");
+            } else {
+                console.error("❌ Failed to download logs");
+                alert("❌ Failed to download logs. Check console for details.");
+            }
+        });
+    });
+
 });
 
 chrome.tabs.onActivated.addListener(() => {

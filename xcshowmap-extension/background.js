@@ -2,6 +2,156 @@ chrome.runtime.onInstalled.addListener(() => {
     console.log("✅ Extension Installed: xcshowmap is ready!");
 });
 
+// Enhanced logging system for debugging - writes to extension folder
+class ExtensionLogger {
+    constructor() {
+        this.logs = [];
+        this.maxLogs = 500; // Reduced for file writing
+    }
+
+    async writeLogFile() {
+        try {
+            const logContent = this.logs.map(log => 
+                `[${log.timestamp}] [${log.level}] ${log.message}\n${log.data ? JSON.stringify(log.data, null, 2) + '\n' : ''}---\n`
+            ).join('');
+            
+            // Also write formatted JSON for easier parsing
+            const jsonLogs = {
+                generated: new Date().toISOString(),
+                totalLogs: this.logs.length,
+                logs: this.logs
+            };
+            
+            // Store in local storage
+            chrome.storage.local.set({
+                'debug_logs': jsonLogs,
+                'debug_log_text': logContent
+            });
+            
+        } catch (error) {
+            console.error('Failed to write log file:', error);
+        }
+    }
+
+    log(level, message, data = null) {
+        const timestamp = new Date().toISOString();
+        const logEntry = {
+            timestamp,
+            level,
+            message,
+            data: data,
+            url: data?.url || 'unknown'
+        };
+        
+        // Only store errors and warnings to reduce data size
+        if (level === 'ERROR' || level === 'WARN') {
+            this.logs.push(logEntry);
+            
+            // Keep only recent critical logs
+            if (this.logs.length > this.maxLogs) {
+                this.logs.shift();
+            }
+            
+            // Auto-write log file after each critical entry
+            this.writeLogFile();
+        }
+        
+        // Enhanced console logging with structured data (all levels)
+        const logPrefix = `[${timestamp}] [${level}] ${message}`;
+        console.log(logPrefix);
+        if (data) {
+            console.table(data);
+        }
+    }
+
+    error(message, data = null) {
+        this.log('ERROR', message, data);
+    }
+
+    warn(message, data = null) {
+        this.log('WARN', message, data);
+    }
+
+    info(message, data = null) {
+        this.log('INFO', message, data);
+    }
+
+    debug(message, data = null) {
+        this.log('DEBUG', message, data);
+    }
+
+    // Force output all logs for copying
+    outputAllLogs() {
+        const logContent = this.logs.map(log => 
+            `[${log.timestamp}] [${log.level}] ${log.message}\n${log.data ? JSON.stringify(log.data, null, 2) + '\n' : ''}---\n`
+        ).join('');
+        
+        console.log('='.repeat(80));
+        console.log('ALL DEBUG LOGS FOR FILE EXPORT');
+        console.log('='.repeat(80));
+        console.log(logContent);
+        console.log('='.repeat(80));
+        console.log('END ALL LOGS');
+        console.log('='.repeat(80));
+        
+        return logContent;
+    }
+
+    // Download logs as file
+    downloadLogs() {
+        const logContent = this.logs.map(log => 
+            `[${log.timestamp}] [${log.level}] ${log.message}\n${log.data ? JSON.stringify(log.data, null, 2) + '\n' : ''}---\n`
+        ).join('');
+        
+        // Create comprehensive log file with metadata
+        const fullLogContent = `XC Service Flow Mapper Debug Logs
+Generated: ${new Date().toISOString()}
+Total Entries: ${this.logs.length}
+Extension Version: 1.0
+
+${'='.repeat(80)}
+DEBUG LOGS
+${'='.repeat(80)}
+
+${logContent}
+
+${'='.repeat(80)}
+JSON STRUCTURED DATA
+${'='.repeat(80)}
+
+${JSON.stringify({
+    generated: new Date().toISOString(),
+    totalLogs: this.logs.length,
+    logs: this.logs
+}, null, 2)}
+`;
+        
+        // Convert to data URL for Chrome extension service worker
+        const dataUrl = 'data:text/plain;charset=utf-8,' + encodeURIComponent(fullLogContent);
+        const filename = `xcshowmap-debug-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+        
+        chrome.downloads.download({
+            url: dataUrl,
+            filename: filename,
+            saveAs: false  // Auto-save to Downloads folder
+        }, (downloadId) => {
+            if (chrome.runtime.lastError) {
+                console.error('❌ Failed to download logs:', chrome.runtime.lastError.message);
+                logger.error("Download logs failed", {
+                    error: chrome.runtime.lastError.message,
+                    logCount: this.logs.length,
+                    contentLength: fullLogContent.length
+                });
+            } else {
+                console.log('✅ Debug logs downloaded:', filename);
+                console.log('📁 Check your Downloads folder for the file');
+            }
+        });
+    }
+}
+
+const logger = new ExtensionLogger();
+
 let tabData = {}; // Store data per tab ID
 
 class APIResponse {
@@ -65,8 +215,6 @@ class APIResponse {
 chrome.webRequest.onCompleted.addListener(
     function (details) {
         if (details.url && details.tabId && details.tabId !== -1) {
-            console.log("🌐 Captured URL for tab", details.tabId, ":", details.url);
-
             // Initialize tab data if not exists
             if (!tabData[details.tabId]) {
                 tabData[details.tabId] = { urls: [], csrf_token: null };
@@ -77,21 +225,147 @@ chrome.webRequest.onCompleted.addListener(
                 tabData[details.tabId].urls.push(details.url);
             }
 
-            // Extract CSRF token for this tab
-            if (details.url.includes("csrf=")) {
-                const urlParams = new URLSearchParams(new URL(details.url).search);
-                const csrfToken = urlParams.get("csrf");
+            // Enhanced CSRF token extraction for F5 Volterra console
+            if (details.url.includes("console.ves.volterra.io")) {
+                console.log("🔍 Volterra console request detected for tab", details.tabId, "URL:", details.url);
 
-                if (csrfToken) {
-                    console.log("🔑 Extracted CSRF Token for tab", details.tabId, ":", csrfToken);
-                    tabData[details.tabId].csrf_token = csrfToken;
-                } else {
-                    console.warn("⚠️ CSRF token detected but not extracted for tab", details.tabId);
+                try {
+                    // Method 1: Check URL parameters for csrf token
+                    if (details.url.includes("csrf=")) {
+                        const urlParams = new URLSearchParams(new URL(details.url).search);
+                        const csrfToken = urlParams.get("csrf");
+                        if (csrfToken) {
+                            console.log("✅ CSRF Token extracted from URL for tab", details.tabId);
+                            tabData[details.tabId].csrf_token = csrfToken;
+                            notifyContentScript(details.tabId, csrfToken);
+                            return;
+                        }
+                    }
+
+                    // Method 2: Check for X-CSRF-Token in response headers (common pattern)
+                    if (details.responseHeaders) {
+                        for (const header of details.responseHeaders) {
+                            if (header.name.toLowerCase() === 'x-csrf-token' && header.value) {
+                                console.log("✅ CSRF Token extracted from X-CSRF-Token header for tab", details.tabId);
+                                tabData[details.tabId].csrf_token = header.value;
+                                notifyContentScript(details.tabId, header.value);
+                                return;
+                            }
+                        }
+                    }
+
+                    // Method 3: Check for Set-Cookie headers with CSRF token
+                    if (details.responseHeaders) {
+                        for (const header of details.responseHeaders) {
+                            if (header.name.toLowerCase() === 'set-cookie' && header.value) {
+                                // Look for various CSRF cookie patterns
+                                const csrfPatterns = [
+                                    /csrf[_-]?token=([^;]+)/i,
+                                    /xsrf[_-]?token=([^;]+)/i,
+                                    /_token=([^;]+)/i,
+                                    /csrftoken=([^;]+)/i
+                                ];
+                                
+                                for (const pattern of csrfPatterns) {
+                                    const match = header.value.match(pattern);
+                                    if (match && match[1]) {
+                                        console.log("✅ CSRF Token extracted from cookie for tab", details.tabId);
+                                        tabData[details.tabId].csrf_token = match[1];
+                                        notifyContentScript(details.tabId, match[1]);
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                } catch (error) {
+                    logger.error("Error parsing Volterra console request for CSRF token", {
+                        tabId: details.tabId,
+                        url: details.url,
+                        error: error.message
+                    });
                 }
             }
         }
     },
-    { urls: ["<all_urls>"] }
+    { urls: ["<all_urls>"] },
+    ["responseHeaders"]
+);
+
+// Helper function to notify content script of CSRF token with retry logic
+function notifyContentScript(tabId, csrfToken) {
+    // First, store the token for immediate retrieval
+    tabData[tabId].csrf_token = csrfToken;
+    
+    // Try to notify content script with retry logic
+    let attempts = 0;
+    const maxAttempts = 3;
+    const retryDelay = 500; // 500ms between attempts
+    
+    function attemptNotification() {
+        attempts++;
+        chrome.tabs.sendMessage(tabId, {
+            action: "csrfTokenCaptured",
+            csrfToken: csrfToken
+        }).then(() => {
+            console.log("✅ Successfully notified content script of CSRF token");
+        }).catch((error) => {
+            if (attempts < maxAttempts) {
+                console.log(`🔄 Content script not ready, retrying (${attempts}/${maxAttempts})...`);
+                setTimeout(attemptNotification, retryDelay);
+            } else {
+                // Only log warning after all attempts failed, and it's not critical since content script can request token
+                console.log("⚠️ Content script notification failed after retries - token is stored and available on request");
+            }
+        });
+    }
+    
+    attemptNotification();
+}
+
+// Also check request headers for CSRF tokens
+chrome.webRequest.onBeforeSendHeaders.addListener(
+    function (details) {
+        if (details.url && details.tabId && details.tabId !== -1 && 
+            details.url.includes("console.ves.volterra.io")) {
+            
+            // Initialize tab data if not exists
+            if (!tabData[details.tabId]) {
+                tabData[details.tabId] = { urls: [], csrf_token: null };
+            }
+
+            // Skip if we already have a token for this tab
+            if (tabData[details.tabId].csrf_token) {
+                return;
+            }
+
+            try {
+                // Check request headers for CSRF token
+                if (details.requestHeaders) {
+                    for (const header of details.requestHeaders) {
+                        const headerName = header.name.toLowerCase();
+                        if ((headerName === 'x-csrf-token' || 
+                             headerName === 'x-xsrf-token' || 
+                             headerName === 'csrf-token') && header.value) {
+                            console.log("✅ CSRF Token extracted from request header for tab", details.tabId);
+                            tabData[details.tabId].csrf_token = header.value;
+                            notifyContentScript(details.tabId, header.value);
+                            return;
+                        }
+                    }
+                }
+            } catch (error) {
+                logger.error("Error parsing request headers for CSRF token", {
+                    tabId: details.tabId,
+                    url: details.url,
+                    error: error.message
+                });
+            }
+        }
+    },
+    { urls: ["https://*.console.ves.volterra.io/*"] },
+    ["requestHeaders"]
 );
 
 // Clean up closed tabs
@@ -119,6 +393,75 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true; // Keeps the response channel open for async sendResponse
     }
 
+    if (message.action === "logDebugInfo") {
+        logger.debug("Content script debug info", {
+            tabId: sender.tab?.id,
+            ...message.data
+        });
+        return true;
+    }
+
+    if (message.action === "logError") {
+        logger.error(message.message, {
+            tabId: sender.tab?.id,
+            ...message.data
+        });
+        return true;
+    }
+
+    if (message.action === "logWarning") {
+        logger.warn(message.message, {
+            tabId: sender.tab?.id,
+            ...message.data
+        });
+        return true;
+    }
+
+    if (message.action === "downloadLogs") {
+        logger.downloadLogs();
+        sendResponse({ success: true });
+        return true;
+    }
+
+    if (message.action === "contentScriptReady") {
+        const tabId = sender.tab?.id;
+        console.log("✅ Content script ready for tab", tabId);
+        
+        // If we have a CSRF token waiting for this tab, send it now
+        if (tabId && tabData[tabId]?.csrf_token) {
+            console.log("🔑 Sending waiting CSRF token to ready content script");
+            chrome.tabs.sendMessage(tabId, {
+                action: "csrfTokenCaptured",
+                csrfToken: tabData[tabId].csrf_token
+            }).catch(() => {
+                // Still might not be ready, but we tried
+            });
+        }
+        sendResponse({ success: true });
+        return true;
+    }
+
+
+    if (message.action === "storeLoadBalancers") {
+        const tabId = sender.tab?.id;
+        if (tabId && message.loadBalancers) {
+            chrome.storage.local.set({ [`loadBalancers_${tabId}`]: message.loadBalancers }, () => {
+                logger.info("Stored Load Balancers for tab", {
+                    tabId: tabId,
+                    count: message.loadBalancers.length
+                });
+                sendResponse({ success: true });
+            });
+        } else {
+            logger.error("Missing tab ID or load balancers data", {
+                tabId: tabId,
+                hasLoadBalancers: !!message.loadBalancers
+            });
+            sendResponse({ success: false, error: "Missing tab ID or data" });
+        }
+        return true;
+    }
+
     if (message.type === "getLoadBalancers") {
         const tabId = message.tabId || sender.tab?.id;
         chrome.storage.local.get(`loadBalancers_${tabId}`, (data) => {
@@ -133,98 +476,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         if (!lbObject) {
             console.error("❌ Load Balancer data is missing.");
+            sendResponse({ error: "Load Balancer data is missing" });
             return;
         }
 
         console.log("📊 Processing Load Balancer:", lbObject.name);
         console.log("🔍 Raw Load Balancer JSON Data:", lbObject);
 
-        try {
-            const lb = new APIResponse(lbObject);
-
-            let mermaidDiagram = `graph LR;\n`;
-
-            // 🔹 Connect the User to each Domain
-            lb.domains.forEach(domain => {
-                mermaidDiagram += `  User --> ${domain};\n`;
-            });
-
-            // 🔹 Connect Domains to ServicePolicies
-            const servicePolicyBox = lb.activeServicePolicies.length > 0
-                ? `"**Service Policies**<br>${lb.activeServicePolicies.map(policy => policy.name).join("<br>")}"`
-                : `"**Service Policies**<br>None Configured"`;
-
-            // // 🔹 Connect Domains to Service Policies
-            lb.domains.forEach(domain => {
-                mermaidDiagram += `  ${domain} --> ServicePolicies[${servicePolicyBox}];\n`;
-            });
-
-            // 🔹 Add a WAF box if configured
-            if (lb.appFirewall) {
-                const wafBox = `"**WAF**<br>${lb.appFirewall}"`;
-                mermaidDiagram += `  ServicePolicies --> WAF[${wafBox}];\n`;
-                mermaidDiagram += `  WAF --> Routes;\n`;  // WAF sits between ServicePolicies and Routes
-            } else {
-                mermaidDiagram += `  ServicePolicies --> Routes;\n`; // No WAF, ServicePolicies links directly to Routes
-            }
-
-            // 🔹 Create a Routes box
-            mermaidDiagram += `  Routes["**Routes**"];\n`;
-
-            // 🔹 Process Default Route Pool (if exists)
-            if (lb.defaultRoutePools.length > 0) {
-                mermaidDiagram += `  Routes --> DefaultRoute["**Default Route Pool**"];\n`;
-                lb.defaultRoutePools.forEach(pool => {
-                    mermaidDiagram += `  DefaultRoute --> Pool["${pool.name}"];`; // ✅ Fixed by accessing `name`
-                });
-            }
-
-            // 🔹 Process Individual Routes
-            lb.routes.forEach((route, index) => {
-                const routeLabel = route.type === "redirect" ? `RedirectRoute${index + 1}` : `Route${index + 1}`;
-
-                // 🔹 Extract Path and Headers
-                const path = route.path || "/";
-                const headers = route.headers?.map(header => `${header.name}=${header.value}`).join("<br>") || "None";
-
-                // 🔹 Construct Route Box with Path and Headers
-                const routeBox = route.type === "redirect"
-                    ? `"**Redirect Route**<br>Path: ${path}<br>Header: ${headers}"`
-                    : `"**Route**<br>Path: ${path}<br>Header: ${headers}"`;
-
-                mermaidDiagram += `  Routes --> ${routeLabel}[${routeBox}];\n`;
-
-                // 🔹 Handle Simple Routes
-                if (route.type === "simple") {
-                    route.originPools.forEach(pool => {
-                        mermaidDiagram += `  ${routeLabel} --> Pool["${pool}"];\n`;
-                    });
+        // Use Promise-based approach instead of async/await in message listener
+        generateMermaidDiagram(lbObject)
+            .then(mermaidDiagram => {
+                if (!mermaidDiagram) {
+                    throw new Error("Failed to generate diagram content");
                 }
 
-                // 🔹 Handle Redirect Routes
-                else if (route.type === "redirect") {
-                    mermaidDiagram += `  ${routeLabel} -->|Redirects to| Redirect["${route.hostRedirect}${route.pathRedirect}"];`;
-                }
+                console.log("🖼️ **Generated Advanced Mermaid Diagram:**\n", mermaidDiagram);
 
-                // 🔹 Handle Direct Response Routes
-                else if (route.type === "direct_response") {
-                    const escapedResponse = route.responseBody.replace(/"/g, "'"); // Replace quotes
-                    mermaidDiagram += `  ${routeLabel} -->|Returns ${route.responseCode}| Response["${escapedResponse}"];`;
-                }
+                // ✅ Encode the diagram and open a new tab
+                const encodedDiagram = encodeURIComponent(mermaidDiagram);
+                const diagramUrl = `chrome-extension://${chrome.runtime.id}/mermaid.html?diagram=${encodedDiagram}`;
+
+                chrome.tabs.create({ url: diagramUrl });
+
+                sendResponse({ mermaidDiagram });
+            })
+            .catch(error => {
+                console.error("❌ Error in generating Advanced Mermaid Diagram:", error);
+                sendResponse({ error: error.message });
             });
-
-            console.log("🖼️ **Generated Mermaid Diagram:**\n", mermaidDiagram);
-
-            // ✅ Encode the diagram and open a new tab
-            const encodedDiagram = encodeURIComponent(mermaidDiagram);
-            const diagramUrl = `chrome-extension://${chrome.runtime.id}/mermaid.html?diagram=${encodedDiagram}`;
-
-            chrome.tabs.create({ url: diagramUrl });
-
-            sendResponse({ mermaidDiagram });
-        } catch (error) {
-            console.error("❌ Error in generating Mermaid Diagram:", error);
-        }
+        
+        return true; // Keep response channel open for async response
     }
 
 });
@@ -248,107 +529,295 @@ function attachDebugger() {
 }
 
 
-// Enhanced diagram generation
+// Enhanced diagram generation based on CLI tool
 function generateMermaidDiagram(lb) {
-    try {
-        let diagram = `graph LR;\n`;
-        const sanitize = (str) => str.replace(/[^a-zA-Z0-9]/g, '_');
+    return new Promise((resolve, reject) => {
+        try {
+            const sanitize = (str) => str.replace(/[^a-zA-Z0-9]/g, '_');
+            let diagram = '';
+            let edges = 0;
+            const wafAdded = new Map();
+            const poolToUpstream = new Map();
+            let nodeCount = 0;
 
-        // User to Domains
-        lb.domains.forEach(domain => {
-            const safeDomain = sanitize(domain);
-            diagram += `  User --> ${safeDomain}["${domain}"];\n`;
-        });
+            // Determine Load Balancer Type
+            let loadBalancerLabel = "Load Balancer";
+            if (lb.get_spec?.advertise_on_public_default_vip || 
+                lb.get_spec?.advertise_on_public ||
+                (lb.get_spec?.advertise_on_public_default_vip && 
+                 Object.keys(lb.get_spec.advertise_on_public_default_vip || {}).length === 0)) {
+                loadBalancerLabel = "Public Load Balancer";
+            } else if (lb.get_spec?.advertise_on_custom || 
+                       lb.get_spec?.advertise_custom?.advertise_where?.length > 0) {
+                loadBalancerLabel = "Private Load Balancer";
+            }
 
-        // Service Policies
-        const policyBox = lb.activeServicePolicies.length > 0
-            ? `"**Service Policies**<br>${lb.activeServicePolicies.map(p => p.name).join("<br>")}"`
-            : `"**Service Policies**<br>None"`;
-        lb.domains.forEach(domain => {
-            const safeDomain = sanitize(domain);
-            diagram += `  ${safeDomain} --> ServicePolicies[${policyBox}];\n`;
-        });
-
-        // WAF and Routes
-        if (lb.appFirewall) {
-            diagram += `  ServicePolicies --> WAF["**WAF**<br>${lb.appFirewall}"];\n`;
-            diagram += `  WAF --> Routes;\n`;
-        } else {
-            diagram += `  ServicePolicies --> Routes;\n`;
+        // WAF Configuration
+        const wafName = lb.get_spec?.app_firewall?.name || "WAF Not Configured";
+        let wafClass = "certValid"; // Default to valid
+        if (!lb.get_spec?.app_firewall?.name) {
+            if (loadBalancerLabel === "Public Load Balancer") {
+                wafClass = "noWaf"; // Public LB without WAF is concerning
+            } else {
+                wafClass = "certError"; // Private LB without WAF is questionable
+            }
         }
-        diagram += `  Routes["**Routes**"];\n`;
 
-        // Default Route Pool
-        if (lb.defaultRoutePools.length) {
-            diagram += `  Routes --> DefaultRoute["**Default Route Pool**"];\n`;
-            lb.defaultRoutePools.forEach(pool => {
-                const safePoolName = sanitize(pool.name);
-                diagram += `  DefaultRoute --> ${safePoolName}["${pool.name}"];\n`;
+        // Start Mermaid diagram (advanced syntax for v11.7+)
+        diagram += `---\n`;
+        diagram += `title: ${lb.name} Load Balancer Service Flow\n`;
+        diagram += `---\n`;
+        diagram += `graph LR;\n`;
+
+        // User and Load Balancer
+        diagram += `    User --> LoadBalancer;\n`;
+        diagram += `    LoadBalancer["**${lb.name} ${loadBalancerLabel}**"];\n`;
+
+        // Define CSS classes for styling with advanced features
+        diagram += `    classDef certValid stroke:#01ba44,stroke-width:2px;\n`;
+        diagram += `    classDef certWarning stroke:#DAA520,stroke-width:2px;\n`;
+        diagram += `    classDef certError stroke:#B22222,stroke-width:2px;\n`;
+        diagram += `    classDef noWaf fill:#FF5733,stroke:#B22222,stroke-width:2px;\n`;
+        diagram += `    classDef animate stroke-dasharray: 9,5,stroke-dashoffset: 900,animation: dash 25s linear infinite;\n`;
+
+        // Process Domains with Certificate Info
+        if (lb.get_spec?.domains) {
+            for (const domain of lb.get_spec.domains) {
+                const certState = lb.get_spec?.cert_state || "Unknown";
+                const certExpiration = lb.get_spec?.downstream_tls_certificate_expiration_timestamps?.[0] || "Unknown";
+                
+                let certClass = "certValid";
+                let certStateDisplay = "Valid";
+                
+                if (certState === "CertificateExpiringSoon") {
+                    certClass = "certWarning";
+                    certStateDisplay = "Expiring Soon";
+                } else if (certState === "CertificateExpired") {
+                    certClass = "certError";
+                    certStateDisplay = "Expired";
+                } else if (certState !== "CertificateValid" && certState !== "Unknown") {
+                    certClass = "certError";
+                    certStateDisplay = certState;
+                }
+
+                const domainNodeID = sanitize(domain);
+                const domainNode = `domain_${domainNodeID}["${domain}<br> Cert: ${certStateDisplay} <br> Exp: ${certExpiration}"]`;
+                
+                diagram += `    LoadBalancer e${edges}@-- SNI --> ${domainNode};\n`;
+                edges++;
+                diagram += `    class domain_${domainNodeID} ${certClass};\n`;
+            }
+        }
+
+        // Handle Private Load Balancer Advertise Targets
+        if (loadBalancerLabel === "Private Load Balancer" && 
+            lb.get_spec?.advertise_custom?.advertise_where?.length > 0) {
+            
+            diagram += `    subgraph AdvertiseTargets ["**Advertised To**"]\n`;
+            diagram += `        direction LR\n`;
+
+            lb.get_spec.advertise_custom.advertise_where.forEach((adv, i) => {
+                const nodeID = `adv_target_${i}`;
+                let label = "Unknown Advertise Target";
+
+                if (adv.site) {
+                    label = `Site: ${adv.site.site.name}<br>Network: ${adv.site.network}`;
+                    if (adv.site.ip) label += `<br>IP: ${adv.site.ip}`;
+                } else if (adv.virtual_site) {
+                    label = `Virtual Site: ${adv.virtual_site.virtual_site.name}<br>Network: ${adv.virtual_site.network}`;
+                } else if (adv.virtual_site_with_vip) {
+                    label = `Virtual Site: ${adv.virtual_site_with_vip.virtual_site.name}<br>Network: ${adv.virtual_site_with_vip.network}`;
+                    if (adv.virtual_site_with_vip.ip) label += `<br>IP: ${adv.virtual_site_with_vip.ip}`;
+                } else if (adv.vk8s_service) {
+                    label = `vK8s Service on <br/> ${adv.vk8s_service.site.name}`;
+                }
+
+                diagram += `        ${nodeID}["${label}"];\n`;
+            });
+
+            diagram += `    end\n`;
+
+            // Connect domains to advertise targets
+            if (lb.get_spec?.domains) {
+                lb.get_spec.advertise_custom.advertise_where.forEach((adv, i) => {
+                    const nodeID = `adv_target_${i}`;
+                    lb.get_spec.domains.forEach(domain => {
+                        const domainNodeID = sanitize(domain);
+                        diagram += `    domain_${domainNodeID} e${edges}@--> ${nodeID};\n`;
+                        edges++;
+                    });
+                    diagram += `    ${nodeID} e${edges}@--> ServicePolicies;\n`;
+                    edges++;
+                });
+            }
+        } else if (lb.get_spec?.domains) {
+            // Connect domains to service policies for public LBs
+            lb.get_spec.domains.forEach(domain => {
+                const domainNodeID = sanitize(domain);
+                diagram += `    domain_${domainNodeID} e${edges}@--> ServicePolicies;\n`;
+                edges++;
             });
         }
 
-        // Routes
-        const processedPools = new Set();
-        lb.routes.forEach((route, i) => {
-            const routeId = `Route_${i + 1}`;
-            const label = route.type === "redirect" ? `RedirectRoute_${i + 1}` : routeId;
-            const box = route.type === "redirect"
-                ? `"**Redirect Route**<br>${route.path}"`
-                : `"**Route**<br>${route.path}"`;
-            diagram += `  Routes --> ${label}[${box}];\n`;
+        // Common Security Controls Subgraph
+        diagram += `    subgraph ServicePolicies ["**Common Security Controls**"]\n`;
+        diagram += `        direction LR\n`;
 
-            if (route.type === "simple") {
-                route.originPools.forEach(pool => {
-                    const safePoolName = sanitize(pool);
-                    if (!processedPools.has(pool)) {
-                        processedPools.add(pool);
-                        diagram += `  ${label} --> ${safePoolName}["${pool}"];\n`;
-                    }
-                });
-            } else if (route.type === "redirect") {
-                const target = `${route.hostRedirect}${route.pathRedirect}`;
-                diagram += `  ${label} --> Redirect_${i}["${target}"];\n`;
-            } else if (route.type === "direct_response") {
-                const response = route.responseBody.replace(/"/g, "'");
-                diagram += `  ${label} -->|${route.responseCode}| Response_${i}["${response}"];\n`;
-            }
-        });
-
-        return diagram;
-    } catch (error) {
-        console.error("❌ Diagram generation error:", error);
-        throw new Error(`Failed to generate diagram: ${error.message}`);
-    }
-}
-
-// Enhanced Mermaid generation handler
-async function handleMermaidGeneration(message, sendResponse) {
-    try {
-        console.log("🎨 Generating Mermaid diagram...");
-        const lb = new APIResponse(message.loadBalancer);
-        const diagram = generateMermaidDiagram(lb);
-        if (!diagram) {
-            throw new Error("Failed to generate diagram content");
+        // Service Policies
+        if (lb.get_spec?.active_service_policies?.policies?.length > 0) {
+            lb.get_spec.active_service_policies.policies.forEach(policy => {
+                diagram += `        sp_${sanitize(policy.name)}["${policy.name}"];\n`;
+            });
+        } else if (lb.get_spec?.service_policies_from_namespace) {
+            diagram += `        sp_ns["Apply Namespace Service Policies"];\n`;
+        } else {
+            diagram += `        sp_none["No Service Policies Defined"];\n`;
         }
-        const url = `chrome-extension://${chrome.runtime.id}/mermaid.html?diagram=${encodeURIComponent(diagram)}`;
-        chrome.tabs.create({ url }, (tab) => {
-            if (chrome.runtime.lastError) {
-                console.error("❌ Error creating tab for diagram:", chrome.runtime.lastError.message);
+
+        // Malicious User Detection
+        if (lb.get_spec?.enable_malicious_user_detection) {
+            diagram += `        mud["Malicious User Detection"];\n`;
+        }
+
+        diagram += `    end\n`;
+
+        // API Protection
+        let apiProtectionNode = "";
+        if (lb.get_spec?.api_protection_rules) {
+            apiProtectionNode = "api_protection";
+            diagram += `    api_protection["**API Protection Enabled**"];\n`;
+            diagram += `    ServicePolicies e${edges}@--> api_protection;\n`;
+            edges++;
+        }
+
+        // Bot Defense
+        let botDefenseNode = "";
+        if (lb.get_spec?.bot_defense) {
+            botDefenseNode = "bot_defense[\"**Automated Fraud Enabled**\"]";
+        } else if (lb.get_spec?.disable_bot_defense) {
+            botDefenseNode = "bot_defense[\"**Automated Fraud Disabled**\"]";
+        }
+
+        if (apiProtectionNode && botDefenseNode) {
+            diagram += `    ${apiProtectionNode} e${edges}@--> ${botDefenseNode};\n`;
+            edges++;
+        } else if (botDefenseNode) {
+            diagram += `    ServicePolicies e${edges}@--> ${botDefenseNode};\n`;
+            edges++;
+        }
+
+        // WAF Processing
+        const wafNodeID = sanitize(wafName);
+        const wafNode = `waf_${wafNodeID}["WAF: ${wafName}"]`;
+
+        if (botDefenseNode) {
+            diagram += `    ${botDefenseNode} e${edges}@--> ${wafNode};\n`;
+            edges++;
+        } else if (apiProtectionNode) {
+            diagram += `    ${apiProtectionNode} e${edges}@--> ${wafNode};\n`;
+            edges++;
+        } else {
+            diagram += `    ServicePolicies e${edges}@-->|Process WAF| ${wafNode};\n`;
+            edges++;
+        }
+
+        diagram += `    class waf_${wafNodeID} ${wafClass};\n`;
+        diagram += `    ${wafNode} e${edges}@--> Routes;\n`;
+        edges++;
+
+        diagram += `    Routes["**Routes**"];\n`;
+
+        // Default Route
+        if (lb.get_spec?.default_route_pools?.length > 0) {
+            diagram += `    DefaultRoute["**Default Route**"];\n`;
+            diagram += `    Routes e${edges}@--> DefaultRoute;\n`;
+            edges++;
+
+            for (const pool of lb.get_spec.default_route_pools) {
+                const poolID = `pool_${sanitize(pool.pool.name)}["**Pool**<br>${pool.pool.name}"]`;
+                diagram += `    DefaultRoute --> ${poolID};\n`;
+                // Note: Origin pool details would require additional API calls
             }
-        });
-        console.log("✅ Diagram generated successfully");
-        sendResponse({
-            success: true,
-            mermaidDiagram: diagram
-        });
-    } catch (error) {
-        console.error("❌ Mermaid generation error:", error);
-        sendResponse({
-            success: false,
-            error: error.message
-        });
-    }
+        }
+
+        // Process Routes
+        if (lb.get_spec?.routes) {
+            lb.get_spec.routes.forEach((route, i) => {
+                if (route.simple_route) {
+                    const matchConditions = ["**Route**"];
+                    
+                    if (route.simple_route.path?.prefix) {
+                        matchConditions.push(`Path Match: ${route.simple_route.path.prefix}`);
+                    } else if (route.simple_route.path?.regex) {
+                        matchConditions.push(`Path Regex: ${route.simple_route.path.regex}`);
+                    }
+
+                    route.simple_route.headers?.forEach(header => {
+                        if (header.regex) {
+                            matchConditions.push(`Header Regex: ${header.name} ~ ${header.regex}`);
+                        } else {
+                            matchConditions.push(`Header Match: ${header.name}`);
+                        }
+                    });
+
+                    const nodeID = `route_${i}`;
+                    const matchLabel = matchConditions.join(" <BR> ");
+                    diagram += `    ${nodeID}["${matchLabel}"];\n`;
+                    diagram += `    Routes e${edges}@--> ${nodeID};\n`;
+                    edges++;
+
+                    // Route-specific WAF
+                    const routeWAF = route.simple_route.advanced_options?.app_firewall?.name;
+                    if (routeWAF) {
+                        const routeWafNodeID = `waf_${sanitize(routeWAF)}`;
+                        if (!wafAdded.has(routeWafNodeID)) {
+                            diagram += `    ${routeWafNodeID}["**WAF**: ${routeWAF}"];\n`;
+                            wafAdded.set(routeWafNodeID, true);
+                        }
+                        diagram += `    ${nodeID} e${edges}@--> ${routeWafNodeID};\n`;
+                        edges++;
+                    }
+
+                    // Origin Pools
+                    route.simple_route.origin_pools?.forEach(pool => {
+                        const poolID = `pool_${sanitize(pool.pool.name)}["**Pool**<br>${pool.pool.name}"]`;
+                        
+                        if (routeWAF) {
+                            const routeWafNodeID = `waf_${sanitize(routeWAF)}`;
+                            diagram += `    ${routeWafNodeID} e${edges}@--> ${poolID};\n`;
+                            edges++;
+                        } else {
+                            diagram += `    ${nodeID} e${edges}@--> ${poolID};\n`;
+                            edges++;
+                        }
+                    });
+
+                } else if (route.redirect_route) {
+                    const nodeID = `redirect_${i}`;
+                    const redirectTarget = `${route.redirect_route.route_redirect.host_redirect}${route.redirect_route.route_redirect.path_redirect}`;
+                    diagram += `    ${nodeID}["**Redirect Route**<br>Path: ${route.redirect_route.path.prefix}"];\n`;
+                    diagram += `    Routes e${edges}@--> ${nodeID};\n`;
+                    edges++;
+                    diagram += `    ${nodeID} e${edges}@-->|Redirects to| redirect_target_${i}["${redirectTarget}"];\n`;
+                    edges++;
+                }
+            });
+        }
+
+            // Apply animation to all edges (restored for Mermaid v11.7+)
+            for (let edge = 0; edge < edges; edge++) {
+                diagram += `    class e${edge} animate;\n`;
+            }
+
+            resolve(diagram);
+        } catch (error) {
+            console.error("❌ Advanced diagram generation error:", error);
+            reject(new Error(`Failed to generate advanced diagram: ${error.message}`));
+        }
+    });
 }
+
+// Removed unused handleMermaidGeneration function - integrated into main message listener
 
 
 // Capture network requests from debugger (fallback)
