@@ -1,12 +1,13 @@
 # XC Service Flow Mapper - Chrome Extension
 
-A Chrome extension that generates interactive traffic flow diagrams from F5 Distributed Cloud (Volterra) console API responses, helping visualize load balancer configurations, security policies, and routing rules.
+A Chrome extension that generates interactive traffic flow diagrams from F5 Distributed Cloud console API responses, helping visualize load balancer configurations, security policies, and routing rules.
 
 ## 🚀 Installation
 
 ### Install as Unpacked Extension (Development Mode)
 
 1. **Download/Clone the Repository**
+
    ```bash
    git clone https://github.com/your-repo/xcshowmap_chrome.git
    cd xcshowmap_chrome
@@ -31,7 +32,8 @@ A Chrome extension that generates interactive traffic flow diagrams from F5 Dist
 ## 📋 Usage Instructions
 
 ### Prerequisites
-- Access to F5 Distributed Cloud (Volterra) console
+
+- Access to F5 Distributed Cloud console
 - Valid credentials for the console
 - Load balancers configured in your namespace
 
@@ -67,7 +69,7 @@ A Chrome extension that generates interactive traffic flow diagrams from F5 Dist
 ### Common Issues
 
 1. **"Missing CSRF Token" Error**
-   - **Solution**: Refresh the Volterra console page or navigate to trigger API requests
+   - **Solution**: Refresh the F5XC console page or navigate to trigger API requests
    - The extension needs to capture authentication tokens from network requests
 
 2. **"No Load Balancers Found" Error**
@@ -76,7 +78,7 @@ A Chrome extension that generates interactive traffic flow diagrams from F5 Dist
    - Check that you have appropriate permissions
 
 3. **Extension Not Working**
-   - **Solution**: 
+   - **Solution**:
      - Verify you're on a supported URL pattern
      - Check the browser console for errors
      - Use the "Download Debug Logs" button for detailed troubleshooting
@@ -99,8 +101,9 @@ The extension includes comprehensive logging for troubleshooting:
 ### Browser Console
 
 For immediate debugging, check the browser console:
+
 - **Service Worker Console**: `chrome://extensions/` → Click "service worker" under the extension
-- **Content Script Console**: F12 Developer Tools on the Volterra console page
+- **Content Script Console**: F12 Developer Tools on the F5XC console page
 
 ## 🏗️ Architecture
 
@@ -112,6 +115,7 @@ For immediate debugging, check the browser console:
 ### CSRF Token Handling
 
 The extension uses intelligent token detection:
+
 - **Regular Context**: Uses top-level CSRF tokens
 - **Managed Tenant Context**: Prefers managed tenant CSRF tokens, falls back to top-level
 - **Detection Methods**: URL parameters, response headers, cookies, request headers
@@ -119,6 +123,7 @@ The extension uses intelligent token detection:
 ### Diagram Features
 
 Generated diagrams include:
+
 - **Load Balancer Type**: Public vs Private classification
 - **Certificate Status**: Valid, expiring, or expired certificates
 - **Security Controls**: WAF, service policies, API protection, bot defense
@@ -128,6 +133,7 @@ Generated diagrams include:
 ## 🔒 Permissions Required
 
 The extension requires these permissions:
+
 - **activeTab**: Access current tab for data extraction
 - **storage**: Store tab-specific data
 - **webRequest**: Monitor network requests for CSRF tokens

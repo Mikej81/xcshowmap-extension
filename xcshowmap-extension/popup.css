@@ -78,3 +78,19 @@ button:hover:enabled {
     box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.1);
     margin-top: 15px;
 }
+
+.wrong-page-message {
+    text-align: center;
+    padding: 20px;
+    background-color: #fff3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 5px;
+    color: #856404;
+    margin-top: 10px;
+}
+
+.wrong-page-message p {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.4;
+}

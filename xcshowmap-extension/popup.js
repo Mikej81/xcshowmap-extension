@@ -2,6 +2,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const loadBalancerSelect = document.getElementById("loadBalancerSelect");
     const generateButton = document.getElementById("generateBtn");
+    const wrongPageMessage = document.getElementById("wrongPageMessage");
+    const mainContent = document.getElementById("mainContent");
     let loadBalancers = {};
 
     generateButton.disabled = true;
@@ -11,6 +13,19 @@ document.addEventListener("DOMContentLoaded", () => {
     chrome.tabs.onActivated.addListener(() => {
         console.log("🔄 Active tab changed, refreshing popup...");
         location.reload();
+    });
+
+    // Listen for tab navigation updates
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+        if (changeInfo.status === 'complete') {
+            // Get current active tab to see if it's the one that was updated
+            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                if (tabs[0] && tabs[0].id === tabId) {
+                    console.log("🔄 Active tab navigated, refreshing popup...");
+                    location.reload();
+                }
+            });
+        }
     });
 
     // Get current active tab first
@@ -33,7 +48,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             if (!response?.loadBalancers?.length) {
-                showErrorNotification('No load balancers found in current tab. Refresh the page or check access.');
+                showWrongPageMessage();
                 return;
             }
 
@@ -74,7 +89,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }, (response) => {
             console.log("🔑 CSRF Token for Active Tab:", response.csrfToken);
             if (!response.csrfToken) {
-                showErrorNotification('No CSRF token found for current tab. Please navigate to a Volterra console page.');
+                showWrongPageMessage();
             }
         });
     });
@@ -132,4 +147,10 @@ chrome.tabs.onActivated.addListener(() => {
 // Error notification function
 function showErrorNotification(message) {
     alert(`❌ ${message}`);
+}
+
+// Show wrong page message function
+function showWrongPageMessage() {
+    wrongPageMessage.style.display = 'block';
+    mainContent.style.display = 'none';
 }

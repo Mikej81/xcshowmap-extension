@@ -96,7 +96,7 @@ async function fetchLoadBalancers() {
         console.log("🔍 Debug - Namespace:", namespace ? "Found: " + namespace : "Missing");
 
         if (!namespace) {
-            console.error("❌ Missing Namespace. Check if you're on a Volterra console page with load balancers.");
+            console.error("❌ Missing Namespace. Check if you're on an F5XC console page with load balancers.");
             chrome.runtime.sendMessage({
                 action: "logError", 
                 message: "Missing Namespace",

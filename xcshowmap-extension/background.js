@@ -241,9 +241,9 @@ chrome.webRequest.onCompleted.addListener(
                 });
             }
 
-            // Enhanced CSRF token extraction for F5 Volterra console
+            // Enhanced CSRF token extraction for F5 Distributed Cloud console
             if (details.url.includes("console.ves.volterra.io")) {
-                console.log("🔍 Volterra console request detected for tab", details.tabId, "URL:", details.url);
+                console.log("🔍 F5XC console request detected for tab", details.tabId, "URL:", details.url);
 
                 try {
                     const isManagedTenant = details.url.includes("/managed_tenant/");
@@ -348,7 +348,7 @@ chrome.webRequest.onCompleted.addListener(
                     }
 
                 } catch (error) {
-                    logger.error("Error parsing Volterra console request for CSRF token", {
+                    logger.error("Error parsing F5XC console request for CSRF token", {
                         tabId: details.tabId,
                         url: details.url,
                         error: error.message
@@ -482,6 +482,25 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
 chrome.tabs.onRemoved.addListener((tabId) => {
     delete tabData[tabId];
     console.log("🗑️ Cleaned up data for closed tab:", tabId);
+});
+
+// Listen for tab navigation updates
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    // Only process when navigation is complete
+    if (changeInfo.status === 'complete' && tab.url) {
+        // Clear stored data for this tab when URL changes
+        if (tabData[tabId] && changeInfo.url) {
+            console.log("🔄 Tab navigation detected, clearing stored data for tab:", tabId);
+            tabData[tabId] = { 
+                urls: [], 
+                csrf_token: null, 
+                managed_tenant_csrf: null, 
+                managed_tenant: null 
+            };
+            // Clear stored load balancers for this tab
+            chrome.storage.local.remove(`loadBalancers_${tabId}`);
+        }
+    }
 });
 
 // Listener for retrieving stored URLs and data per tab

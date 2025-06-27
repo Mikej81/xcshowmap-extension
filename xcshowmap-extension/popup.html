@@ -12,13 +12,18 @@
 <body>
     <div class="container">
         <h2>XC Flow Map</h2>
-        <label for="loadBalancerSelect">Select Load Balancer:</label>
-        <select id="loadBalancerSelect">
-            <option value="" disabled selected>Loading...</option>
-        </select>
-        <button id="generateBtn" disabled>Generate Diagram</button>
-        <button id="downloadLogsBtn">Download Debug Logs</button>
-        <div id="diagram" style="display: none;"></div>
+        <div id="wrongPageMessage" class="wrong-page-message" style="display: none;">
+            <p>Please navigate to an F5XC console page with HTTP Load Balancers to use this extension.</p>
+        </div>
+        <div id="mainContent">
+            <label for="loadBalancerSelect">Select Load Balancer:</label>
+            <select id="loadBalancerSelect">
+                <option value="" disabled selected>Loading...</option>
+            </select>
+            <button id="generateBtn" disabled>Generate Diagram</button>
+            <button id="downloadLogsBtn">Download Debug Logs</button>
+            <div id="diagram" style="display: none;"></div>
+        </div>
     </div>
 
     <div id="errorContainer" class="error-container"></div>
