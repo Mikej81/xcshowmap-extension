@@ -152,7 +152,7 @@ ${JSON.stringify({
 
 const logger = new ExtensionLogger();
 
-let tabData = {}; // Store data per tab ID
+let tabData = {}; // Store data per tab ID - structure: { urls: [], csrf_token: null, managed_tenant_csrf: null, managed_tenant: null }
 
 class APIResponse {
     constructor(lbObject) {
@@ -217,7 +217,12 @@ chrome.webRequest.onCompleted.addListener(
         if (details.url && details.tabId && details.tabId !== -1) {
             // Initialize tab data if not exists
             if (!tabData[details.tabId]) {
-                tabData[details.tabId] = { urls: [], csrf_token: null };
+                tabData[details.tabId] = { 
+                    urls: [], 
+                    csrf_token: null, 
+                    managed_tenant_csrf: null, 
+                    managed_tenant: null 
+                };
             }
 
             // Store URL for this specific tab
@@ -225,19 +230,48 @@ chrome.webRequest.onCompleted.addListener(
                 tabData[details.tabId].urls.push(details.url);
             }
 
+            // Extract managed tenant from URL if present
+            const managedTenantMatch = details.url.match(/\/managed_tenant\/([^\/]+)/);
+            if (managedTenantMatch) {
+                tabData[details.tabId].managed_tenant = managedTenantMatch[1];
+                logger.info("Managed tenant detected", {
+                    tabId: details.tabId,
+                    managedTenant: managedTenantMatch[1],
+                    url: details.url
+                });
+            }
+
             // Enhanced CSRF token extraction for F5 Volterra console
             if (details.url.includes("console.ves.volterra.io")) {
                 console.log("🔍 Volterra console request detected for tab", details.tabId, "URL:", details.url);
 
                 try {
+                    const isManagedTenant = details.url.includes("/managed_tenant/");
+                    
                     // Method 1: Check URL parameters for csrf token
                     if (details.url.includes("csrf=")) {
                         const urlParams = new URLSearchParams(new URL(details.url).search);
                         const csrfToken = urlParams.get("csrf");
                         if (csrfToken) {
-                            console.log("✅ CSRF Token extracted from URL for tab", details.tabId);
-                            tabData[details.tabId].csrf_token = csrfToken;
-                            notifyContentScript(details.tabId, csrfToken);
+                            if (isManagedTenant) {
+                                console.log("✅ Managed Tenant CSRF Token extracted from URL for tab", details.tabId);
+                                tabData[details.tabId].managed_tenant_csrf = csrfToken;
+                                logger.info("Managed tenant CSRF token captured", {
+                                    tabId: details.tabId,
+                                    managedTenant: tabData[details.tabId].managed_tenant,
+                                    tokenSource: "URL parameter",
+                                    url: details.url
+                                });
+                            } else {
+                                console.log("✅ Top-level CSRF Token extracted from URL for tab", details.tabId);
+                                tabData[details.tabId].csrf_token = csrfToken;
+                                logger.info("Top-level CSRF token captured", {
+                                    tabId: details.tabId,
+                                    tokenSource: "URL parameter",
+                                    url: details.url
+                                });
+                            }
+                            notifyContentScript(details.tabId, csrfToken, isManagedTenant);
                             return;
                         }
                     }
@@ -246,9 +280,25 @@ chrome.webRequest.onCompleted.addListener(
                     if (details.responseHeaders) {
                         for (const header of details.responseHeaders) {
                             if (header.name.toLowerCase() === 'x-csrf-token' && header.value) {
-                                console.log("✅ CSRF Token extracted from X-CSRF-Token header for tab", details.tabId);
-                                tabData[details.tabId].csrf_token = header.value;
-                                notifyContentScript(details.tabId, header.value);
+                                if (isManagedTenant) {
+                                    console.log("✅ Managed Tenant CSRF Token extracted from X-CSRF-Token header for tab", details.tabId);
+                                    tabData[details.tabId].managed_tenant_csrf = header.value;
+                                    logger.info("Managed tenant CSRF token captured", {
+                                        tabId: details.tabId,
+                                        managedTenant: tabData[details.tabId].managed_tenant,
+                                        tokenSource: "X-CSRF-Token header",
+                                        url: details.url
+                                    });
+                                } else {
+                                    console.log("✅ Top-level CSRF Token extracted from X-CSRF-Token header for tab", details.tabId);
+                                    tabData[details.tabId].csrf_token = header.value;
+                                    logger.info("Top-level CSRF token captured", {
+                                        tabId: details.tabId,
+                                        tokenSource: "X-CSRF-Token header",
+                                        url: details.url
+                                    });
+                                }
+                                notifyContentScript(details.tabId, header.value, isManagedTenant);
                                 return;
                             }
                         }
@@ -269,9 +319,27 @@ chrome.webRequest.onCompleted.addListener(
                                 for (const pattern of csrfPatterns) {
                                     const match = header.value.match(pattern);
                                     if (match && match[1]) {
-                                        console.log("✅ CSRF Token extracted from cookie for tab", details.tabId);
-                                        tabData[details.tabId].csrf_token = match[1];
-                                        notifyContentScript(details.tabId, match[1]);
+                                        if (isManagedTenant) {
+                                            console.log("✅ Managed Tenant CSRF Token extracted from cookie for tab", details.tabId);
+                                            tabData[details.tabId].managed_tenant_csrf = match[1];
+                                            logger.info("Managed tenant CSRF token captured", {
+                                                tabId: details.tabId,
+                                                managedTenant: tabData[details.tabId].managed_tenant,
+                                                tokenSource: "Set-Cookie header",
+                                                cookiePattern: pattern.toString(),
+                                                url: details.url
+                                            });
+                                        } else {
+                                            console.log("✅ Top-level CSRF Token extracted from cookie for tab", details.tabId);
+                                            tabData[details.tabId].csrf_token = match[1];
+                                            logger.info("Top-level CSRF token captured", {
+                                                tabId: details.tabId,
+                                                tokenSource: "Set-Cookie header",
+                                                cookiePattern: pattern.toString(),
+                                                url: details.url
+                                            });
+                                        }
+                                        notifyContentScript(details.tabId, match[1], isManagedTenant);
                                         return;
                                     }
                                 }
@@ -294,9 +362,13 @@ chrome.webRequest.onCompleted.addListener(
 );
 
 // Helper function to notify content script of CSRF token with retry logic
-function notifyContentScript(tabId, csrfToken) {
-    // First, store the token for immediate retrieval
-    tabData[tabId].csrf_token = csrfToken;
+function notifyContentScript(tabId, csrfToken, isManagedTenant = false) {
+    // Store the token in appropriate field
+    if (isManagedTenant) {
+        tabData[tabId].managed_tenant_csrf = csrfToken;
+    } else {
+        tabData[tabId].csrf_token = csrfToken;
+    }
     
     // Try to notify content script with retry logic
     let attempts = 0;
@@ -307,16 +379,25 @@ function notifyContentScript(tabId, csrfToken) {
         attempts++;
         chrome.tabs.sendMessage(tabId, {
             action: "csrfTokenCaptured",
-            csrfToken: csrfToken
+            csrfToken: csrfToken,
+            isManagedTenant: isManagedTenant,
+            managedTenant: tabData[tabId].managed_tenant
         }).then(() => {
-            console.log("✅ Successfully notified content script of CSRF token");
+            const tokenType = isManagedTenant ? "managed tenant" : "top-level";
+            console.log(`✅ Successfully notified content script of ${tokenType} CSRF token`);
+            logger.info("Content script notification successful", {
+                tabId: tabId,
+                tokenType: tokenType,
+                managedTenant: tabData[tabId].managed_tenant
+            });
         }).catch((error) => {
             if (attempts < maxAttempts) {
                 console.log(`🔄 Content script not ready, retrying (${attempts}/${maxAttempts})...`);
                 setTimeout(attemptNotification, retryDelay);
             } else {
                 // Only log warning after all attempts failed, and it's not critical since content script can request token
-                console.log("⚠️ Content script notification failed after retries - token is stored and available on request");
+                const tokenType = isManagedTenant ? "managed tenant" : "top-level";
+                console.log(`⚠️ Content script notification failed after retries - ${tokenType} token is stored and available on request`);
             }
         });
     }
@@ -332,11 +413,21 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
             
             // Initialize tab data if not exists
             if (!tabData[details.tabId]) {
-                tabData[details.tabId] = { urls: [], csrf_token: null };
+                tabData[details.tabId] = { 
+                    urls: [], 
+                    csrf_token: null, 
+                    managed_tenant_csrf: null, 
+                    managed_tenant: null 
+                };
             }
 
-            // Skip if we already have a token for this tab
-            if (tabData[details.tabId].csrf_token) {
+            const isManagedTenant = details.url.includes("/managed_tenant/");
+            
+            // Skip if we already have the appropriate token for this tab
+            if (isManagedTenant && tabData[details.tabId].managed_tenant_csrf) {
+                return;
+            }
+            if (!isManagedTenant && tabData[details.tabId].csrf_token) {
                 return;
             }
 
@@ -348,9 +439,28 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
                         if ((headerName === 'x-csrf-token' || 
                              headerName === 'x-xsrf-token' || 
                              headerName === 'csrf-token') && header.value) {
-                            console.log("✅ CSRF Token extracted from request header for tab", details.tabId);
-                            tabData[details.tabId].csrf_token = header.value;
-                            notifyContentScript(details.tabId, header.value);
+                            
+                            if (isManagedTenant) {
+                                console.log("✅ Managed Tenant CSRF Token extracted from request header for tab", details.tabId);
+                                tabData[details.tabId].managed_tenant_csrf = header.value;
+                                logger.info("Managed tenant CSRF token captured", {
+                                    tabId: details.tabId,
+                                    managedTenant: tabData[details.tabId].managed_tenant,
+                                    tokenSource: "Request header",
+                                    headerName: headerName,
+                                    url: details.url
+                                });
+                            } else {
+                                console.log("✅ Top-level CSRF Token extracted from request header for tab", details.tabId);
+                                tabData[details.tabId].csrf_token = header.value;
+                                logger.info("Top-level CSRF token captured", {
+                                    tabId: details.tabId,
+                                    tokenSource: "Request header",
+                                    headerName: headerName,
+                                    url: details.url
+                                });
+                            }
+                            notifyContentScript(details.tabId, header.value, isManagedTenant);
                             return;
                         }
                     }
@@ -388,8 +498,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "getCsrfToken") {
         const tabId = message.tabId || sender.tab?.id;
         const csrfToken = tabData[tabId]?.csrf_token || null;
-        console.log("📨 Sending CSRF Token for tab", tabId, ":", csrfToken);
-        sendResponse({ csrfToken });
+        const managedTenantCsrf = tabData[tabId]?.managed_tenant_csrf || null;
+        const managedTenant = tabData[tabId]?.managed_tenant || null;
+        
+        console.log("📨 Sending CSRF Tokens for tab", tabId, ":", {
+            topLevel: csrfToken ? "Present" : "Missing",
+            managedTenant: managedTenantCsrf ? "Present" : "Missing",
+            tenant: managedTenant
+        });
+        
+        sendResponse({ 
+            csrfToken, 
+            managedTenantCsrf, 
+            managedTenant,
+            isManagedTenant: !!managedTenant
+        });
         return true; // Keeps the response channel open for async sendResponse
     }
 
@@ -427,15 +550,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const tabId = sender.tab?.id;
         console.log("✅ Content script ready for tab", tabId);
         
-        // If we have a CSRF token waiting for this tab, send it now
-        if (tabId && tabData[tabId]?.csrf_token) {
-            console.log("🔑 Sending waiting CSRF token to ready content script");
-            chrome.tabs.sendMessage(tabId, {
-                action: "csrfTokenCaptured",
-                csrfToken: tabData[tabId].csrf_token
-            }).catch(() => {
-                // Still might not be ready, but we tried
-            });
+        // If we have CSRF tokens waiting for this tab, send them now
+        if (tabId && tabData[tabId]) {
+            const hasTopLevel = !!tabData[tabId].csrf_token;
+            const hasManagedTenant = !!tabData[tabId].managed_tenant_csrf;
+            
+            if (hasTopLevel || hasManagedTenant) {
+                console.log("🔑 Sending waiting CSRF tokens to ready content script", {
+                    topLevel: hasTopLevel,
+                    managedTenant: hasManagedTenant,
+                    tenant: tabData[tabId].managed_tenant
+                });
+                
+                chrome.tabs.sendMessage(tabId, {
+                    action: "csrfTokensCaptured",
+                    csrfToken: tabData[tabId].csrf_token,
+                    managedTenantCsrf: tabData[tabId].managed_tenant_csrf,
+                    managedTenant: tabData[tabId].managed_tenant,
+                    isManagedTenant: !!tabData[tabId].managed_tenant
+                }).catch(() => {
+                    // Still might not be ready, but we tried
+                });
+            }
         }
         sendResponse({ success: true });
         return true;
