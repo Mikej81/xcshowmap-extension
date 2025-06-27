@@ -8,7 +8,8 @@
         "storage",
         "contextMenus",
         "activeTab",
-        "webRequest"
+        "webRequest",
+        "tabs"
     ],
     "host_permissions": [
         "https://*.console.ves.volterra.io/*",

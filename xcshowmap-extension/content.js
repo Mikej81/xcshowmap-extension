@@ -37,9 +37,14 @@ chrome.runtime.sendMessage({ action: "getCsrfToken" }, async (response) => {
             const data = await apiResponse.json();
             console.log("✅ API Response:", data);
 
-            // Store load balancers in background storage
-            chrome.storage.local.set({ loadBalancers: data.items }, () => {
-                console.log("✅ Stored Load Balancers:", data.items);
+            // Store load balancers in tab-specific storage
+            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                const tabId = tabs[0]?.id;
+                if (tabId) {
+                    chrome.storage.local.set({ [`loadBalancers_${tabId}`]: data.items }, () => {
+                        console.log("✅ Stored Load Balancers for tab", tabId, ":", data.items);
+                    });
+                }
             });
 
         } catch (error) {
@@ -98,9 +103,14 @@ async function fetchLoadBalancers() {
             const data = await apiResponse.json();
             console.log("✅ API Response:", data);
 
-            // ✅ Store load balancers in background storage
-            chrome.storage.local.set({ loadBalancers: data.items }, () => {
-                console.log("✅ Stored Load Balancers:", data.items);
+            // ✅ Store load balancers in tab-specific storage
+            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                const tabId = tabs[0]?.id;
+                if (tabId) {
+                    chrome.storage.local.set({ [`loadBalancers_${tabId}`]: data.items }, () => {
+                        console.log("✅ Stored Load Balancers for tab", tabId, ":", data.items);
+                    });
+                }
             });
 
         } catch (error) {

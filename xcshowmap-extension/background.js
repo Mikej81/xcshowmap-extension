@@ -2,7 +2,7 @@ chrome.runtime.onInstalled.addListener(() => {
     console.log("✅ Extension Installed: xcshowmap is ready!");
 });
 
-let capturedUrls = []; // Store captured URLs
+let tabData = {}; // Store data per tab ID
 
 class APIResponse {
     constructor(lbObject) {
@@ -64,29 +64,29 @@ class APIResponse {
 
 chrome.webRequest.onCompleted.addListener(
     function (details) {
-        if (details.url) {
-            console.log("🌐 Captured URL:", details.url);
+        if (details.url && details.tabId && details.tabId !== -1) {
+            console.log("🌐 Captured URL for tab", details.tabId, ":", details.url);
 
-            // Prevent duplicates
-            if (!capturedUrls.includes(details.url)) {
-                capturedUrls.push(details.url);
-                chrome.storage.local.set({ urls: capturedUrls });
+            // Initialize tab data if not exists
+            if (!tabData[details.tabId]) {
+                tabData[details.tabId] = { urls: [], csrf_token: null };
+            }
 
-                // Extract CSRF token if it exists in the URL
-                if (details.url.includes("csrf=")) {
-                    const urlParams = new URLSearchParams(new URL(details.url).search);
-                    const csrfToken = urlParams.get("csrf");
+            // Store URL for this specific tab
+            if (!tabData[details.tabId].urls.includes(details.url)) {
+                tabData[details.tabId].urls.push(details.url);
+            }
 
-                    if (csrfToken) {
-                        console.log("🔑 Extracted CSRF Token:", csrfToken);
+            // Extract CSRF token for this tab
+            if (details.url.includes("csrf=")) {
+                const urlParams = new URLSearchParams(new URL(details.url).search);
+                const csrfToken = urlParams.get("csrf");
 
-                        // Store CSRF token
-                        chrome.storage.local.set({ csrf_token: csrfToken }, () => {
-                            console.log("✅ CSRF Token Stored Successfully:", csrfToken);
-                        });
-                    } else {
-                        console.warn("⚠️ CSRF token detected but not extracted.");
-                    }
+                if (csrfToken) {
+                    console.log("🔑 Extracted CSRF Token for tab", details.tabId, ":", csrfToken);
+                    tabData[details.tabId].csrf_token = csrfToken;
+                } else {
+                    console.warn("⚠️ CSRF token detected but not extracted for tab", details.tabId);
                 }
             }
         }
@@ -94,29 +94,36 @@ chrome.webRequest.onCompleted.addListener(
     { urls: ["<all_urls>"] }
 );
 
-// Listener for retrieving stored URLs
+// Clean up closed tabs
+chrome.tabs.onRemoved.addListener((tabId) => {
+    delete tabData[tabId];
+    console.log("🗑️ Cleaned up data for closed tab:", tabId);
+});
+
+// Listener for retrieving stored URLs and data per tab
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (message.action === "getCapturedUrls") {
-        chrome.storage.local.get("urls", (data) => {
-            console.log("📨 Sending captured URLs:", data.urls);
-            sendResponse({ urls: data.urls || [] });
-        });
+        const tabId = message.tabId || sender.tab?.id;
+        const urls = tabData[tabId]?.urls || [];
+        console.log("📨 Sending captured URLs for tab", tabId, ":", urls);
+        sendResponse({ urls });
         return true; // Keeps the response channel open for async sendResponse
     }
 
     if (message.action === "getCsrfToken") {
-        chrome.storage.local.get("csrf_token", (data) => {
-            console.log("📨 Sending CSRF Token:", data.csrf_token);
-            sendResponse({ csrfToken: data.csrf_token || null });
-        });
+        const tabId = message.tabId || sender.tab?.id;
+        const csrfToken = tabData[tabId]?.csrf_token || null;
+        console.log("📨 Sending CSRF Token for tab", tabId, ":", csrfToken);
+        sendResponse({ csrfToken });
         return true; // Keeps the response channel open for async sendResponse
     }
 
     if (message.type === "getLoadBalancers") {
-        chrome.storage.local.get("loadBalancers", (data) => {
-            console.log("📨 Sending Load Balancers:", data.loadBalancers);
-            sendResponse({ loadBalancers: data.loadBalancers || [] });
+        const tabId = message.tabId || sender.tab?.id;
+        chrome.storage.local.get(`loadBalancers_${tabId}`, (data) => {
+            console.log("📨 Sending Load Balancers for tab", tabId, ":", data[`loadBalancers_${tabId}`]);
+            sendResponse({ loadBalancers: data[`loadBalancers_${tabId}`] || [] });
         });
         return true; // Keeps the response channel open for async sendResponse
     }
