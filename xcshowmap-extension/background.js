@@ -1,12 +1,50 @@
 chrome.runtime.onInstalled.addListener(() => {
     console.log("✅ Extension Installed: xcshowmap is ready!");
+    // Clean up storage on install to prevent quota issues
+    cleanupOldStorageData();
 });
+
+// Function to clean up old storage data
+async function cleanupOldStorageData() {
+    try {
+        console.log("🧹 Cleaning up old storage data to prevent quota issues");
+        
+        // Get all storage keys
+        const allData = await chrome.storage.local.get();
+        const keysToRemove = [];
+        
+        // Remove old load balancer and origin pool data (keep only recent)
+        const currentTime = Date.now();
+        const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+        
+        for (const key of Object.keys(allData)) {
+            // Remove old tab-specific data
+            if (key.startsWith('loadBalancers_') || key.startsWith('originPools_')) {
+                keysToRemove.push(key);
+            }
+            // Remove old debug logs
+            if (key === 'debug_logs' || key === 'debug_log_text' || key === 'api_logs') {
+                keysToRemove.push(key);
+            }
+        }
+        
+        if (keysToRemove.length > 0) {
+            await chrome.storage.local.remove(keysToRemove);
+            console.log(`🧹 Removed ${keysToRemove.length} old storage entries`);
+        }
+        
+    } catch (error) {
+        console.error("❌ Failed to cleanup storage:", error);
+    }
+}
 
 // Enhanced logging system for debugging - writes to extension folder
 class ExtensionLogger {
     constructor() {
         this.logs = [];
-        this.maxLogs = 500; // Reduced for file writing
+        this.apiLogs = []; // New array for API request/response logs
+        this.maxLogs = 50; // Drastically reduced to prevent quota issues
+        this.maxApiLogs = 20; // Reduced API logs
     }
 
     async writeLogFile() {
@@ -19,13 +57,16 @@ class ExtensionLogger {
             const jsonLogs = {
                 generated: new Date().toISOString(),
                 totalLogs: this.logs.length,
-                logs: this.logs
+                totalApiLogs: this.apiLogs.length,
+                logs: this.logs,
+                apiLogs: this.apiLogs
             };
             
             // Store in local storage
             chrome.storage.local.set({
                 'debug_logs': jsonLogs,
-                'debug_log_text': logContent
+                'debug_log_text': logContent,
+                'api_logs': this.apiLogs
             });
             
         } catch (error) {
@@ -35,12 +76,13 @@ class ExtensionLogger {
 
     log(level, message, data = null) {
         const timestamp = new Date().toISOString();
+        
+        // Simplified log entry with minimal data
         const logEntry = {
             timestamp,
             level,
-            message,
-            data: data,
-            url: data?.url || 'unknown'
+            message: message.substring(0, 200), // Truncate long messages
+            url: data?.url?.substring(0, 100) || 'unknown'
         };
         
         // Only store errors and warnings to reduce data size
@@ -52,15 +94,21 @@ class ExtensionLogger {
                 this.logs.shift();
             }
             
-            // Auto-write log file after each critical entry
-            this.writeLogFile();
+            // Only auto-write occasionally to reduce storage calls
+            if (this.logs.length % 10 === 0) {
+                this.writeLogFile();
+            }
         }
         
-        // Enhanced console logging with structured data (all levels)
+        // Enhanced console logging (but don't store large data)
         const logPrefix = `[${timestamp}] [${level}] ${message}`;
         console.log(logPrefix);
-        if (data) {
-            console.table(data);
+        if (data && typeof data === 'object') {
+            // Log summary instead of full data
+            console.log('Data summary:', {
+                keys: Object.keys(data).slice(0, 5),
+                size: JSON.stringify(data).length
+            });
         }
     }
 
@@ -78,6 +126,85 @@ class ExtensionLogger {
 
     debug(message, data = null) {
         this.log('DEBUG', message, data);
+    }
+
+    // New method to log API requests and responses
+    logApiRequest(url, method, requestData = null, responseData = null, tabId = null) {
+        // Store minimal data to avoid quota issues
+        const apiLogEntry = {
+            timestamp: new Date().toISOString(),
+            tabId: tabId,
+            url: url.substring(0, 200), // Truncate long URLs
+            method: method,
+            contentType: responseData?.contentType?.substring(0, 50),
+            statusCode: responseData?.statusCode,
+            isJson: responseData?.isJson || false,
+            dataSize: responseData?.data ? JSON.stringify(responseData.data).length : 0,
+            itemCount: responseData?.data?.items?.length || 0
+        };
+
+        this.apiLogs.push(apiLogEntry);
+
+        // Keep only recent API logs
+        if (this.apiLogs.length > this.maxApiLogs) {
+            this.apiLogs.shift();
+        }
+
+        // Log to console for immediate debugging (but don't store large data)
+        console.log(`🌐 [API] ${method} ${url}`, {
+            tabId: tabId,
+            statusCode: responseData?.statusCode,
+            dataSize: apiLogEntry.dataSize,
+            itemCount: apiLogEntry.itemCount
+        });
+
+        // Only store to chrome.storage if needed, and without large data
+        if (this.apiLogs.length % 5 === 0) { // Only write every 5 entries
+            this.writeLogFile();
+        }
+    }
+
+    // Analyze captured origin pool data
+    analyzeOriginPools() {
+        const originPoolApis = this.apiLogs.filter(log => 
+            log.url.includes('origin_pools') || log.url.includes('pool') || 
+            log.url.includes('member') || log.url.includes('server') ||
+            log.url.includes('endpoint') || log.url.includes('backend')
+        );
+
+        if (originPoolApis.length === 0) {
+            return "No origin pool related API calls found.";
+        }
+
+        let analysis = `Found ${originPoolApis.length} origin pool related API calls:\n\n`;
+        
+        originPoolApis.forEach((api, index) => {
+            analysis += `${index + 1}. ${api.method} ${api.url}\n`;
+            analysis += `   Status: ${api.responseData?.statusCode || 'unknown'}\n`;
+            
+            if (api.responseData?.data) {
+                const data = api.responseData.data;
+                analysis += `   Response Type: ${typeof data}\n`;
+                analysis += `   Has Items: ${!!data.items}\n`;
+                analysis += `   Item Count: ${data.items?.length || 0}\n`;
+                
+                if (data.items && data.items.length > 0) {
+                    analysis += `   Sample Item Keys: ${Object.keys(data.items[0]).join(', ')}\n`;
+                    
+                    // Look for member information
+                    const sampleItem = data.items[0];
+                    if (sampleItem.members || sampleItem.origin_servers || sampleItem.servers) {
+                        analysis += `   ✅ Contains member/server information!\n`;
+                    }
+                    if (sampleItem.targets || sampleItem.endpoints) {
+                        analysis += `   ✅ Contains target/endpoint information!\n`;
+                    }
+                }
+            }
+            analysis += '\n';
+        });
+
+        return analysis;
     }
 
     // Force output all logs for copying
@@ -103,10 +230,16 @@ class ExtensionLogger {
             `[${log.timestamp}] [${log.level}] ${log.message}\n${log.data ? JSON.stringify(log.data, null, 2) + '\n' : ''}---\n`
         ).join('');
         
+        // Create API logs content
+        const apiLogContent = this.apiLogs.map(log => 
+            `[${log.timestamp}] [API] ${log.method} ${log.url} (${log.responseData?.statusCode || 'unknown'})\n${log.responseData?.data ? JSON.stringify(log.responseData.data, null, 2) + '\n' : ''}---\n`
+        ).join('');
+        
         // Create comprehensive log file with metadata
         const fullLogContent = `XC Service Flow Mapper Debug Logs
 Generated: ${new Date().toISOString()}
-Total Entries: ${this.logs.length}
+Total Debug Entries: ${this.logs.length}
+Total API Entries: ${this.apiLogs.length}
 Extension Version: 1.0
 
 ${'='.repeat(80)}
@@ -116,13 +249,35 @@ ${'='.repeat(80)}
 ${logContent}
 
 ${'='.repeat(80)}
+API REQUEST/RESPONSE LOGS
+${'='.repeat(80)}
+
+${apiLogContent}
+
+${'='.repeat(80)}
+ORIGIN POOL DATA ANALYSIS
+${'='.repeat(80)}
+
+${this.analyzeOriginPools()}
+
+${'='.repeat(80)}
 JSON STRUCTURED DATA
 ${'='.repeat(80)}
 
 ${JSON.stringify({
     generated: new Date().toISOString(),
     totalLogs: this.logs.length,
-    logs: this.logs
+    totalApiLogs: this.apiLogs.length,
+    logs: this.logs,
+    apiLogs: this.apiLogs.map(log => ({
+        timestamp: log.timestamp,
+        url: log.url,
+        method: log.method,
+        statusCode: log.responseData?.statusCode,
+        hasJsonResponse: !!log.responseData?.data,
+        responseKeys: log.responseData?.data ? Object.keys(log.responseData.data) : [],
+        itemCount: log.responseData?.data?.items?.length || 0
+    }))
 }, null, 2)}
 `;
         
@@ -361,6 +516,86 @@ chrome.webRequest.onCompleted.addListener(
     ["responseHeaders"]
 );
 
+// Comprehensive API request interceptor for capturing JSON responses
+chrome.webRequest.onBeforeRequest.addListener(
+    function(details) {
+        // Only intercept API requests to F5XC console
+        if (details.url.includes("console.ves.volterra.io") && 
+            (details.url.includes("/api/") || details.url.includes("/api"))) {
+            
+            console.log(`🌐 [API-INTERCEPT] ${details.method} ${details.url}`, {
+                tabId: details.tabId,
+                type: details.type,
+                timeStamp: details.timeStamp
+            });
+
+            // Store request info for matching with response
+            if (!apiRequestMap) {
+                global.apiRequestMap = new Map();
+            }
+            
+            apiRequestMap.set(details.requestId, {
+                url: details.url,
+                method: details.method,
+                tabId: details.tabId,
+                timestamp: new Date().toISOString(),
+                requestBody: details.requestBody
+            });
+        }
+    },
+    { urls: ["<all_urls>"] },
+    ["requestBody"]
+);
+
+// Intercept responses to capture JSON data
+chrome.webRequest.onCompleted.addListener(
+    function(details) {
+        // Check if this was an API request we're tracking
+        if (apiRequestMap && apiRequestMap.has(details.requestId)) {
+            const requestInfo = apiRequestMap.get(details.requestId);
+            
+            // Determine if this is likely a JSON response
+            const contentType = details.responseHeaders?.find(
+                header => header.name.toLowerCase() === 'content-type'
+            )?.value || '';
+            
+            const isJsonResponse = contentType.includes('application/json') || 
+                                 contentType.includes('text/json') ||
+                                 details.url.includes('/api/');
+            
+            console.log(`📡 [API-RESPONSE] ${requestInfo.method} ${requestInfo.url}`, {
+                tabId: details.tabId,
+                statusCode: details.statusCode,
+                contentType: contentType,
+                isJsonResponse: isJsonResponse,
+                responseSize: details.responseHeaders?.find(h => h.name.toLowerCase() === 'content-length')?.value
+            });
+
+            // Log the API request/response for analysis
+            logger.logApiRequest(
+                requestInfo.url,
+                requestInfo.method,
+                requestInfo.requestBody,
+                {
+                    statusCode: details.statusCode,
+                    contentType: contentType,
+                    isJson: isJsonResponse,
+                    headers: details.responseHeaders
+                },
+                details.tabId
+            );
+
+            // Clean up tracking
+            apiRequestMap.delete(details.requestId);
+        }
+    },
+    { urls: ["<all_urls>"] },
+    ["responseHeaders"]
+);
+
+// Global map to track API requests
+let apiRequestMap = new Map();
+
 // Helper function to notify content script of CSRF token with retry logic
 function notifyContentScript(tabId, csrfToken, isManagedTenant = false) {
     // Store the token in appropriate field
@@ -514,6 +749,56 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true; // Keeps the response channel open for async sendResponse
     }
 
+    if (message.action === "logApiData") {
+        const apiData = message.data;
+        console.log(`📊 [API-DATA] Received API data from content script:`, {
+            url: apiData.url,
+            method: apiData.method,
+            status: apiData.status,
+            dataSize: JSON.stringify(apiData.responseData).length,
+            hasItems: !!apiData.responseData.items,
+            itemCount: apiData.responseData.items?.length || 0
+        });
+        
+        // Enhanced logging for origin pool related APIs
+        if (apiData.url.includes('origin_pools') || apiData.url.includes('pool') || 
+            apiData.url.includes('member') || apiData.url.includes('server') ||
+            apiData.url.includes('endpoint') || apiData.url.includes('backend')) {
+            
+            console.log(`🎯 [ORIGIN-POOL-API] Captured potential origin pool data:`, apiData.responseData);
+            
+            // Log specific structure for analysis
+            if (apiData.responseData.items) {
+                apiData.responseData.items.forEach((item, index) => {
+                    console.log(`🔍 [POOL-ITEM-${index}] Structure:`, {
+                        name: item.name || item.id || 'unknown',
+                        keys: Object.keys(item),
+                        hasMembers: !!(item.members || item.origin_servers || item.servers),
+                        hasTargets: !!(item.targets || item.endpoints)
+                    });
+                });
+            }
+        }
+        
+        // Store in detailed API logs
+        logger.logApiRequest(
+            apiData.url,
+            apiData.method,
+            null, // request data not available from content script
+            {
+                statusCode: apiData.status,
+                isJson: true,
+                data: apiData.responseData,
+                contentType: 'application/json',
+                duration: apiData.duration
+            },
+            sender.tab?.id
+        );
+        
+        sendResponse({ success: true });
+        return true;
+    }
+
     if (message.action === "getCsrfToken") {
         const tabId = message.tabId || sender.tab?.id;
         const csrfToken = tabData[tabId]?.csrf_token || null;
@@ -617,6 +902,52 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true;
     }
 
+    if (message.action === "storeOriginPools") {
+        const tabId = sender.tab?.id;
+        if (tabId && message.originPools && message.namespace) {
+            // Store minimal origin pool data to avoid quota issues
+            const minimalPools = message.originPools.map(pool => ({
+                name: pool.name,
+                namespace: pool.namespace,
+                loadbalancer_algorithm: pool.get_spec?.loadbalancer_algorithm || 'round_robin',
+                server_count: pool.get_spec?.origin_servers?.length || 0,
+                origin_servers: pool.get_spec?.origin_servers?.map(server => ({
+                    public_name: server.public_name?.dns_name ? { dns_name: server.public_name.dns_name } : null,
+                    public_ip: server.public_ip?.ip ? { ip: server.public_ip.ip } : null,
+                    private_ip: server.private_ip?.ip ? { ip: server.private_ip.ip } : null,
+                    private_name: server.private_name?.dns_name ? { dns_name: server.private_name.dns_name } : null,
+                    k8s_service: server.k8s_service ? {
+                        service_name: server.k8s_service.service_name,
+                        site_name: server.k8s_service.site_locator?.site?.name
+                    } : null,
+                    vk8s_service: server.vk8s_service ? {
+                        service_name: server.vk8s_service.service_name
+                    } : null,
+                    port: server.labels?.['ves.io/port']
+                })).filter(server => 
+                    server.public_name || server.public_ip || server.private_ip || 
+                    server.private_name || server.k8s_service || server.vk8s_service
+                ) || []
+            }));
+
+            chrome.storage.local.set({ 
+                [`originPools_${tabId}_${message.namespace}`]: minimalPools 
+            }, () => {
+                console.log(`✅ [BACKGROUND] Minimal origin pools stored for tab ${tabId} namespace ${message.namespace}:`, minimalPools.length, "pools");
+                
+                // Log summary
+                minimalPools.forEach(pool => {
+                    console.log(`📦 [STORED-POOL] ${pool.name}: ${pool.server_count} servers, Algorithm: ${pool.loadbalancer_algorithm}`);
+                });
+                
+                sendResponse({ success: true });
+            });
+        } else {
+            sendResponse({ success: false, error: "Missing tab ID, origin pools, or namespace" });
+        }
+        return true;
+    }
+
     if (message.type === "getLoadBalancers") {
         const tabId = message.tabId || sender.tab?.id;
         chrome.storage.local.get(`loadBalancers_${tabId}`, (data) => {
@@ -639,7 +970,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.log("🔍 Raw Load Balancer JSON Data:", lbObject);
 
         // Use Promise-based approach instead of async/await in message listener
-        generateMermaidDiagram(lbObject)
+        // Get the tab ID to fetch origin pool data
+        const tabId = sender.tab?.id;
+        
+        generateMermaidDiagramWithOriginPools(lbObject, tabId)
             .then(mermaidDiagram => {
                 if (!mermaidDiagram) {
                     throw new Error("Failed to generate diagram content");
@@ -684,8 +1018,88 @@ function attachDebugger() {
 }
 
 
+// Enhanced diagram generation with origin pool data
+async function generateMermaidDiagramWithOriginPools(lb, tabId) {
+    return new Promise(async (resolve, reject) => {
+        try {
+            console.log(`🔄 [DIAGRAM] Generating enhanced diagram for ${lb.name} with origin pool data`);
+            
+            // First get the namespace from the load balancer
+            const namespace = lb.namespace;
+            
+            // Get stored origin pools data
+            let originPoolsData = [];
+            if (tabId && namespace) {
+                const storageKey = `originPools_${tabId}_${namespace}`;
+                const storage = await chrome.storage.local.get(storageKey);
+                originPoolsData = storage[storageKey] || [];
+                console.log(`📦 [DIAGRAM] Retrieved ${originPoolsData.length} origin pools for enhancement`);
+                console.log(`📦 [DIAGRAM] Origin pools data:`, originPoolsData);
+                
+                // Log each pool's details
+                originPoolsData.forEach(pool => {
+                    console.log(`🔍 [DIAGRAM] Pool ${pool.name}: ${pool.server_count} servers, algorithm: ${pool.loadbalancer_algorithm}`);
+                    if (pool.origin_servers) {
+                        pool.origin_servers.forEach((server, idx) => {
+                            console.log(`  📋 [DIAGRAM] Server ${idx}:`, server);
+                        });
+                    }
+                });
+            } else {
+                console.warn(`⚠️ [DIAGRAM] Missing tabId (${tabId}) or namespace (${namespace}) for origin pool lookup`);
+            }
+            
+            // Call the original diagram generation with origin pools data
+            const diagram = await generateMermaidDiagramEnhanced(lb, originPoolsData);
+            resolve(diagram);
+            
+        } catch (error) {
+            console.error("❌ Enhanced diagram generation error:", error);
+            reject(error);
+        }
+    });
+}
+
+// Helper function to generate origin server nodes (updated for minimal data structure)
+function generateOriginServerNodes(originPoolData, poolID, sanitize) {
+    const servers = originPoolData.origin_servers || [];
+    let serverNodes = '';
+    
+    servers.forEach((server, serverIndex) => {
+        const serverID = `${poolID}_server_${serverIndex}`;
+        let serverLabel = `**Server ${serverIndex + 1}**`;
+        
+        // Determine server type and details from minimal structure
+        if (server.public_name?.dns_name) {
+            serverLabel += `<br>DNS: ${server.public_name.dns_name}`;
+        } else if (server.public_ip?.ip) {
+            serverLabel += `<br>IP: ${server.public_ip.ip}`;
+        } else if (server.private_ip?.ip) {
+            serverLabel += `<br>Private IP: ${server.private_ip.ip}`;
+        } else if (server.private_name?.dns_name) {
+            serverLabel += `<br>Private DNS: ${server.private_name.dns_name}`;
+        } else if (server.k8s_service) {
+            serverLabel += `<br>K8s: ${server.k8s_service.service_name}`;
+            if (server.k8s_service.site_name) {
+                serverLabel += `<br>Site: ${server.k8s_service.site_name}`;
+            }
+        } else if (server.vk8s_service) {
+            serverLabel += `<br>vK8s: ${server.vk8s_service.service_name}`;
+        }
+        
+        // Add port if specified
+        if (server.port) {
+            serverLabel += `<br>Port: ${server.port}`;
+        }
+        
+        serverNodes += `    ${poolID} --> ${serverID}["${serverLabel}"];\n`;
+    });
+    
+    return serverNodes;
+}
+
 // Enhanced diagram generation based on CLI tool
-function generateMermaidDiagram(lb) {
+function generateMermaidDiagramEnhanced(lb, originPoolsData = []) {
     return new Promise((resolve, reject) => {
         try {
             const sanitize = (str) => str.replace(/[^a-zA-Z0-9]/g, '_');
@@ -889,9 +1303,31 @@ function generateMermaidDiagram(lb) {
             edges++;
 
             for (const pool of lb.get_spec.default_route_pools) {
-                const poolID = `pool_${sanitize(pool.pool.name)}["**Pool**<br>${pool.pool.name}"]`;
-                diagram += `    DefaultRoute --> ${poolID};\n`;
-                // Note: Origin pool details would require additional API calls
+                const poolID = `pool_${sanitize(pool.pool.name)}`;
+                
+                // Find matching origin pool data
+                const originPoolData = originPoolsData.find(p => p.name === pool.pool.name);
+                console.log(`🔍 [DIAGRAM] Looking for pool '${pool.pool.name}' in stored data:`, !!originPoolData);
+                let poolLabel = `**Pool**<br>${pool.pool.name}`;
+                
+                if (originPoolData) {
+                    console.log(`✅ [DIAGRAM] Found origin pool data for '${pool.pool.name}':`, originPoolData);
+                    const serverCount = originPoolData.server_count || 0;
+                    const algorithm = originPoolData.loadbalancer_algorithm || 'round_robin';
+                    poolLabel += `<br>Servers: ${serverCount}<br>Algorithm: ${algorithm}`;
+                } else {
+                    console.warn(`⚠️ [DIAGRAM] No origin pool data found for '${pool.pool.name}'`);
+                }
+                
+                diagram += `    DefaultRoute --> ${poolID}["${poolLabel}"];\n`;
+                
+                // Add origin servers if available
+                if (originPoolData?.origin_servers?.length > 0) {
+                    console.log(`🔗 [DIAGRAM] Adding ${originPoolData.origin_servers.length} servers for pool '${pool.pool.name}'`);
+                    diagram += generateOriginServerNodes(originPoolData, poolID, sanitize);
+                } else {
+                    console.log(`📋 [DIAGRAM] No origin servers to add for pool '${pool.pool.name}'`);
+                }
             }
         }
 
@@ -935,7 +1371,23 @@ function generateMermaidDiagram(lb) {
 
                     // Origin Pools
                     route.simple_route.origin_pools?.forEach(pool => {
-                        const poolID = `pool_${sanitize(pool.pool.name)}["**Pool**<br>${pool.pool.name}"]`;
+                        const poolIDName = `pool_${sanitize(pool.pool.name)}`;
+                        
+                        // Find matching origin pool data
+                        const originPoolData = originPoolsData.find(p => p.name === pool.pool.name);
+                        console.log(`🔍 [DIAGRAM] Route pool '${pool.pool.name}' lookup:`, !!originPoolData);
+                        let poolLabel = `**Pool**<br>${pool.pool.name}`;
+                        
+                        if (originPoolData) {
+                            console.log(`✅ [DIAGRAM] Found route pool data for '${pool.pool.name}':`, originPoolData);
+                            const serverCount = originPoolData.server_count || 0;
+                            const algorithm = originPoolData.loadbalancer_algorithm || 'round_robin';
+                            poolLabel += `<br>Servers: ${serverCount}<br>Algorithm: ${algorithm}`;
+                        } else {
+                            console.warn(`⚠️ [DIAGRAM] No route pool data found for '${pool.pool.name}'`);
+                        }
+                        
+                        const poolID = `${poolIDName}["${poolLabel}"]`;
                         
                         if (routeWAF) {
                             const routeWafNodeID = `waf_${sanitize(routeWAF)}`;
@@ -944,6 +1396,14 @@ function generateMermaidDiagram(lb) {
                         } else {
                             diagram += `    ${nodeID} e${edges}@--> ${poolID};\n`;
                             edges++;
+                        }
+                        
+                        // Add origin servers if available
+                        if (originPoolData?.origin_servers?.length > 0) {
+                            console.log(`🔗 [DIAGRAM] Adding ${originPoolData.origin_servers.length} servers for route pool '${pool.pool.name}'`);
+                            diagram += generateOriginServerNodes(originPoolData, poolIDName, sanitize);
+                        } else {
+                            console.log(`📋 [DIAGRAM] No origin servers to add for route pool '${pool.pool.name}'`);
                         }
                     });
 

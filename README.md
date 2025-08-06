@@ -2,7 +2,7 @@
 
 A Chrome extension that generates interactive traffic flow diagrams from F5 Distributed Cloud console API responses, helping visualize load balancer configurations, security policies, and routing rules.
 
-## 🚀 Installation
+## Installation
 
 ### Install as Unpacked Extension (Development Mode)
 
@@ -29,7 +29,7 @@ A Chrome extension that generates interactive traffic flow diagrams from F5 Dist
    - Look for "XC Service Flow Mapper" in your extensions
    - The extension icon should appear in the Chrome toolbar
 
-## 📋 Usage Instructions
+## Usage Instructions
 
 ### Prerequisites
 
@@ -105,7 +105,7 @@ For immediate debugging, check the browser console:
 - **Service Worker Console**: `chrome://extensions/` → Click "service worker" under the extension
 - **Content Script Console**: F12 Developer Tools on the F5XC console page
 
-## 🏗️ Architecture
+## Architecture
 
 ### Supported Contexts
 
@@ -130,7 +130,7 @@ Generated diagrams include:
 - **Routing Logic**: Default routes, path-based routing, redirects
 - **Origin Pools**: Backend service destinations
 
-## 🔒 Permissions Required
+## Permissions Required
 
 The extension requires these permissions:
 
@@ -141,7 +141,7 @@ The extension requires these permissions:
 - **downloads**: Export debug logs
 - **Host permissions**: Access to `*.console.ves.volterra.io`
 
-## 🤝 Contributing
+## Contributing
 
 This extension is designed for F5 Distributed Cloud console integration. When contributing:
 
@@ -150,6 +150,6 @@ This extension is designed for F5 Distributed Cloud console integration. When co
 3. Verify CSRF token detection across different authentication methods
 4. Test diagram generation with various load balancer configurations
 
-## 📄 License
+## License
 
 See LICENSE file for details.

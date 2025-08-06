@@ -90,7 +90,29 @@ button:hover:enabled {
 }
 
 .wrong-page-message p {
-    margin: 0;
+    margin: 0 0 15px 0;
     font-size: 14px;
     line-height: 1.4;
+}
+
+.refresh-button {
+    background-color: #28a745;
+    margin-right: 10px;
+    width: 45%;
+    display: inline-block;
+}
+
+.refresh-button:hover {
+    background-color: #218838;
+}
+
+.retry-button {
+    background-color: #17a2b8;
+    width: 45%;
+    display: inline-block;
+    margin-top: 0;
+}
+
+.retry-button:hover {
+    background-color: #138496;
 }
