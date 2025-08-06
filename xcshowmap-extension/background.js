@@ -240,7 +240,7 @@ class ExtensionLogger {
 Generated: ${new Date().toISOString()}
 Total Debug Entries: ${this.logs.length}
 Total API Entries: ${this.apiLogs.length}
-Extension Version: 1.0
+Extension Version: 1.5
 
 ${'='.repeat(80)}
 DEBUG LOGS
