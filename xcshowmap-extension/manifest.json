@@ -10,7 +10,8 @@
         "activeTab",
         "webRequest",
         "tabs",
-        "downloads"
+        "downloads",
+        "scripting"
     ],
     "host_permissions": [
         "https://*.console.ves.volterra.io/*",
@@ -37,8 +38,7 @@
     "content_scripts": [
         {
             "matches": [
-                "https://*.console.ves.volterra.io/web/workspaces/multi-cloud-app-connect/namespaces/*/manage/load_balancers/http_loadbalancers*",
-                "https://*.console.ves.volterra.io/managed_tenant/*/web/workspaces/multi-cloud-app-connect/namespaces/*/manage/load_balancers/http_loadbalancers*"
+                "https://*.console.ves.volterra.io/*"
             ],
             "js": [
                 "content.js"
