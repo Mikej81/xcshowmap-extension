@@ -1,11 +1,40 @@
 document.addEventListener("DOMContentLoaded", () => {
+    console.log(`🚀 [POPUP] Extension popup loaded at ${new Date().toISOString()}`);
 
     const loadBalancerSelect = document.getElementById("loadBalancerSelect");
     const generateButton = document.getElementById("generateBtn");
+    const wrongPageMessage = document.getElementById("wrongPageMessage");
+    const mainContent = document.getElementById("mainContent");
+    const refreshPageBtn = document.getElementById("refreshPageBtn");
+    const retryBtn = document.getElementById("retryBtn");
     let loadBalancers = {};
 
     generateButton.disabled = true;
     generateButton.style.backgroundColor = "#ccc";
+
+    // Enhanced logging for popup state
+    console.log(`📊 [POPUP] Initial state - mainContent visible: ${mainContent.style.display !== 'none'}, wrongPageMessage visible: ${wrongPageMessage.style.display !== 'none'}`);
+
+    // Refresh page button functionality
+    refreshPageBtn.addEventListener("click", () => {
+        console.log(`🔄 [POPUP] User clicked refresh page button at ${new Date().toISOString()}`);
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (tabs[0]) {
+                console.log(`🔄 [POPUP] Refreshing tab ${tabs[0].id}: ${tabs[0].url}`);
+                chrome.tabs.reload(tabs[0].id);
+                window.close();
+            }
+        });
+    });
+
+    // Retry button functionality
+    retryBtn.addEventListener("click", () => {
+        console.log(`🔄 [POPUP] User clicked retry button at ${new Date().toISOString()}`);
+        wrongPageMessage.style.display = 'none';
+        mainContent.style.display = 'block';
+        loadBalancerSelect.innerHTML = '<option value="" disabled selected>Loading...</option>';
+        fetchLoadBalancersOnce();
+    });
 
     // Refresh popup when the active tab changes
     chrome.tabs.onActivated.addListener(() => {
@@ -13,23 +42,85 @@ document.addEventListener("DOMContentLoaded", () => {
         location.reload();
     });
 
-    chrome.runtime.sendMessage({ type: "getLoadBalancers" }, (response) => {
-        if (chrome.runtime.lastError) {
-            showErrorNotification("Runtime Error: ${ chrome.runtime.lastError.message }");
-            return;
+    // Listen for tab navigation updates
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+        if (changeInfo.status === 'complete') {
+            // Get current active tab to see if it's the one that was updated
+            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                if (tabs[0] && tabs[0].id === tabId) {
+                    console.log("🔄 Active tab navigated, refreshing popup...");
+                    location.reload();
+                }
+            });
         }
+    });
 
-        if (!response?.loadBalancers?.length) {
-            showErrorNotification('No load balancers found. Refresh the page or check access.');
-            return;
-        }
+    // Initial load attempt
+    function fetchLoadBalancersOnce() {
+        console.log(`📡 [POPUP] Starting fetchLoadBalancersOnce at ${new Date().toISOString()}`);
+        
+        // Add timeout to prevent indefinite loading
+        const timeoutId = setTimeout(() => {
+            console.warn(`⏰ [POPUP] Load balancer fetch timed out after 5 seconds`);
+            showWrongPageMessage();
+        }, 5000);
+        
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            const currentTabId = tabs[0]?.id;
+            const currentUrl = tabs[0]?.url;
+            
+            console.log(`📍 [POPUP] Current tab: ${currentTabId}, URL: ${currentUrl}`);
+            
+            if (!currentTabId) {
+                clearTimeout(timeoutId);
+                console.error(`❌ [POPUP] No active tab found`);
+                showErrorNotification('No active tab found');
+                return;
+            }
 
-        console.log("📨 Load Balancers Received:", response.loadBalancers);
+            // Request load balancers for current tab only
+            console.log(`📡 [POPUP] Requesting load balancers for tab ${currentTabId}`);
+            chrome.runtime.sendMessage({ 
+                type: "getLoadBalancers", 
+                tabId: currentTabId 
+            }, (response) => {
+                clearTimeout(timeoutId); // Clear timeout since we got a response
+                console.log(`📨 [POPUP] Received response:`, response);
+                
+                if (chrome.runtime.lastError) {
+                    console.error(`❌ [POPUP] Runtime error:`, chrome.runtime.lastError.message);
+                    showErrorNotification(`Runtime Error: ${chrome.runtime.lastError.message}`);
+                    return;
+                }
 
-        response.loadBalancers.forEach(lb => {
+                if (!response?.loadBalancers?.length) {
+                    console.warn(`⚠️ [POPUP] No load balancers found in response`);
+                    showWrongPageMessage();
+                    return;
+                }
+
+                console.log(`✅ [POPUP] Found ${response.loadBalancers.length} load balancers`);
+                populateLoadBalancers(response.loadBalancers);
+            });
+        });
+    }
+    
+    // Start initial fetch
+    fetchLoadBalancersOnce();
+    
+    function populateLoadBalancers(loadBalancerList) {
+        console.log(`📊 [POPUP] populateLoadBalancers called with ${loadBalancerList.length} items at ${new Date().toISOString()}`);
+        console.log(`📊 [POPUP] Load balancer details:`, loadBalancerList.map(lb => ({name: lb.name, namespace: lb.namespace})));
+
+        // Clear existing data
+        loadBalancers = {};
+        
+        loadBalancerList.forEach(lb => {
             loadBalancers[lb.name] = lb;
+            console.log(`📋 [POPUP] Added load balancer: ${lb.name} (namespace: ${lb.namespace})`);
         });
 
+        // Populate dropdown with current tab's load balancers
         loadBalancerSelect.innerHTML = "";
         const defaultOption = document.createElement("option");
         defaultOption.value = "";
@@ -38,7 +129,7 @@ document.addEventListener("DOMContentLoaded", () => {
         defaultOption.selected = true;
         loadBalancerSelect.appendChild(defaultOption);
 
-        response.loadBalancers.forEach(lb => {
+        loadBalancerList.forEach(lb => {
             const option = document.createElement("option");
             option.value = lb.name;
             option.textContent = lb.name;
@@ -46,17 +137,33 @@ document.addEventListener("DOMContentLoaded", () => {
             loadBalancerSelect.appendChild(option);
         });
 
-        console.log("✅ Load Balancers Populated in Dropdown.");
-    });
+        // Show main content and hide error message
+        mainContent.style.display = 'block';
+        wrongPageMessage.style.display = 'none';
 
+        console.log(`✅ [POPUP] Successfully populated ${loadBalancerList.length} load balancers in dropdown`);
+    }
+
+    // Optional CSRF token check (non-blocking)
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         const tabId = tabs[0]?.id;
-        chrome.runtime.sendMessage({ action: "getCsrfToken", tabId }, (response) => {
-            console.log("🔑 CSRF Token for Active Tab:", response.csrfToken);
-        });
-
-        chrome.runtime.sendMessage({ action: "getNamespace", tabId }, (response) => {
-            console.log("📌 Namespace for Active Tab:", response.namespace);
+        if (!tabId) {
+            console.warn(`⚠️ [POPUP] No tab ID for CSRF token check`);
+            return;
+        }
+        
+        console.log(`🔑 [POPUP] Checking CSRF token for tab ${tabId}`);
+        chrome.runtime.sendMessage({ 
+            action: "getCsrfToken", 
+            tabId: tabId 
+        }, (response) => {
+            console.log(`🔑 [POPUP] CSRF Token check result:`, {
+                tabId: tabId,
+                hasTopLevel: !!response?.csrfToken,
+                hasManagedTenant: !!response?.managedTenantCsrf,
+                managedTenant: response?.managedTenant,
+                timestamp: new Date().toISOString()
+            });
         });
     });
 
@@ -91,6 +198,18 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    // Download debug logs button
+    document.getElementById("downloadLogsBtn").addEventListener("click", () => {
+        chrome.runtime.sendMessage({ action: "downloadLogs" }, (response) => {
+            if (response?.success) {
+                console.log("✅ Debug logs download initiated");
+            } else {
+                console.error("❌ Failed to download logs");
+                alert("❌ Failed to download logs. Check console for details.");
+            }
+        });
+    });
+
 });
 
 chrome.tabs.onActivated.addListener(() => {
@@ -100,5 +219,30 @@ chrome.tabs.onActivated.addListener(() => {
 
 // Error notification function
 function showErrorNotification(message) {
-    alert("❌ ${ message }");
+    alert(`❌ ${message}`);
+}
+
+// Show wrong page message function
+function showWrongPageMessage() {
+    console.log(`⚠️ [POPUP] Showing wrong page message at ${new Date().toISOString()}`);
+    console.log(`📊 [POPUP] Page state when showing error:`, {
+        url: window.location.href,
+        readyState: document.readyState,
+        timestamp: new Date().toISOString()
+    });
+    
+    // Log current tab info for debugging
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]) {
+            console.log(`📍 [POPUP] Current tab info:`, {
+                id: tabs[0].id,
+                url: tabs[0].url,
+                title: tabs[0].title,
+                status: tabs[0].status
+            });
+        }
+    });
+    
+    wrongPageMessage.style.display = 'block';
+    mainContent.style.display = 'none';
 }

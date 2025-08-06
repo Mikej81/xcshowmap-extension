@@ -78,3 +78,41 @@ button:hover:enabled {
     box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.1);
     margin-top: 15px;
 }
+
+.wrong-page-message {
+    text-align: center;
+    padding: 20px;
+    background-color: #fff3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 5px;
+    color: #856404;
+    margin-top: 10px;
+}
+
+.wrong-page-message p {
+    margin: 0 0 15px 0;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.refresh-button {
+    background-color: #28a745;
+    margin-right: 10px;
+    width: 45%;
+    display: inline-block;
+}
+
+.refresh-button:hover {
+    background-color: #218838;
+}
+
+.retry-button {
+    background-color: #17a2b8;
+    width: 45%;
+    display: inline-block;
+    margin-top: 0;
+}
+
+.retry-button:hover {
+    background-color: #138496;
+}
