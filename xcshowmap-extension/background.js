@@ -863,7 +863,12 @@ async function fetchOriginPoolsForLoadBalancer(tabId, namespace, loadBalancer) {
 
     if (referencedPoolNames.size === 0) {
         console.log(` [BACKGROUND] No origin pools to fetch`);
-        return [];
+        return { 
+            pools: [],
+            baseUrl: null,
+            csrfToken: null,
+            managedTenant: null
+        };
     }
 
     const tabInfo = tabData[tabId];
@@ -922,13 +927,23 @@ async function fetchOriginPoolsForLoadBalancer(tabId, namespace, loadBalancer) {
         );
 
         console.log(` [BACKGROUND] Filtered to ${relevantPools.length} relevant origin pools`);
-        return relevantPools;
+        return { 
+            pools: relevantPools,
+            baseUrl,
+            csrfToken,
+            managedTenant
+        };
 
     } catch (error) {
         console.error(` [BACKGROUND] Origin pools fetch failed:`, error);
         // Don't fail the whole diagram generation if origin pools fail
         console.log(` [BACKGROUND] Continuing diagram generation without origin pool details`);
-        return [];
+        return { 
+            pools: [],
+            baseUrl: null,
+            csrfToken: null,
+            managedTenant: null
+        };
     }
 }
 
@@ -1339,9 +1354,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
                 // First fetch origin pools, then generate diagram
                 fetchOriginPoolsForLoadBalancer(tabId, namespace, lbObject)
-                    .then(originPools => {
+                    .then(result => {
                         console.log("🎆 Fetched origin pools, generating enhanced diagram");
-                        return generateMermaidDiagramEnhanced(lbObject, originPools);
+                        return generateMermaidDiagramEnhanced(
+                            lbObject, 
+                            result.pools, 
+                            result.baseUrl, 
+                            result.csrfToken, 
+                            result.managedTenant
+                        );
                     })
                     .then(mermaidDiagram => {
                         if (!mermaidDiagram) {
@@ -1412,7 +1433,7 @@ async function generateMermaidDiagramWithOriginPools(lb, tabId) {
                     console.log(` [DIAGRAM] Pool ${pool.name}: ${pool.server_count} servers, algorithm: ${pool.loadbalancer_algorithm}`);
                     if (pool.origin_servers) {
                         pool.origin_servers.forEach((server, idx) => {
-                            console.log(`   [DIAGRAM] Server ${idx}:`, server);
+                            console.log(`   [DIAGRAM] Node ${idx}:`, server);
                         });
                     }
                 });
@@ -1421,7 +1442,8 @@ async function generateMermaidDiagramWithOriginPools(lb, tabId) {
             }
 
             // Call the original diagram generation with origin pools data
-            const diagram = await generateMermaidDiagramEnhanced(lb, originPoolsData);
+            // Note: We don't have baseUrl, csrfToken, managedTenant here, so RE connections won't be added
+            const diagram = await generateMermaidDiagramEnhanced(lb, originPoolsData, null, null, null);
             resolve(diagram);
 
         } catch (error) {
@@ -1431,14 +1453,53 @@ async function generateMermaidDiagramWithOriginPools(lb, tabId) {
     });
 }
 
+// Helper function to fetch site data for connected REs
+async function fetchSiteData(siteName, baseUrl, csrfToken, managedTenant) {
+    if (!siteName || !baseUrl || !csrfToken) {
+        console.warn('Missing required parameters for fetching site data');
+        return null;
+    }
+
+    let apiUrl;
+    if (managedTenant) {
+        apiUrl = `${baseUrl}/managed_tenant/${managedTenant}/api/config/namespaces/system/sites/${siteName}?csrf=${csrfToken}`;
+    } else {
+        apiUrl = `${baseUrl}/api/config/namespaces/system/sites/${siteName}?csrf=${csrfToken}`;
+    }
+
+    console.log(`🌐 [BACKGROUND] Fetching site data for: ${siteName}`);
+
+    try {
+        const response = await fetch(apiUrl, {
+            credentials: 'include',
+            headers: {
+                'Accept': 'application/json',
+                'X-CSRF-Token': csrfToken
+            }
+        });
+
+        if (!response.ok) {
+            console.warn(`Failed to fetch site data for ${siteName}: ${response.status}`);
+            return null;
+        }
+
+        const data = await response.json();
+        console.log(` [BACKGROUND] Received site data for ${siteName}:`, data);
+        return data;
+    } catch (error) {
+        console.error(`Error fetching site data for ${siteName}:`, error);
+        return null;
+    }
+}
+
 // Helper function to generate origin server nodes (updated for full API data structure)
-function generateOriginServerNodes(originPoolData, poolID, sanitize) {
+function generateOriginServerNodes(originPoolData, poolID, siteDataMap = null) {
     const servers = originPoolData.get_spec?.origin_servers || [];
     let serverNodes = '';
 
     servers.forEach((server, serverIndex) => {
         const serverID = `${poolID}_server_${serverIndex}`;
-        let serverLabel = `**Server ${serverIndex + 1}**`;
+        let serverLabel = `**Node ${serverIndex + 1}**`;
 
         // Determine server type and details from full API structure
         if (server.public_name?.dns_name) {
@@ -1451,11 +1512,75 @@ function generateOriginServerNodes(originPoolData, poolID, sanitize) {
             serverLabel += `<br>Private DNS: ${server.private_name.dns_name}`;
         } else if (server.k8s_service) {
             serverLabel += `<br>K8s: ${server.k8s_service.service_name}`;
-            if (server.k8s_service.site_locator?.site?.name) {
-                serverLabel += `<br>Site: ${server.k8s_service.site_locator.site.name}`;
-            }
         } else if (server.vk8s_service) {
             serverLabel += `<br>vK8s: ${server.vk8s_service.service_name}`;
+        }
+
+        // Add site locator information for all server types
+        let siteLocator = null;
+        if (server.public_name?.site_locator) {
+            siteLocator = server.public_name.site_locator;
+        } else if (server.public_ip?.site_locator) {
+            siteLocator = server.public_ip.site_locator;
+        } else if (server.private_ip?.site_locator) {
+            siteLocator = server.private_ip.site_locator;
+        } else if (server.private_name?.site_locator) {
+            siteLocator = server.private_name.site_locator;
+        } else if (server.k8s_service?.site_locator) {
+            siteLocator = server.k8s_service.site_locator;
+        } else if (server.vk8s_service?.site_locator) {
+            siteLocator = server.vk8s_service.site_locator;
+        }
+
+        // Display site locator information
+        if (siteLocator) {
+            if (siteLocator.site?.name) {
+                const siteName = siteLocator.site.name;
+                serverLabel += `<br>Site: ${siteName}`;
+                
+                // Add RE information if site data is available
+                if (siteDataMap && siteDataMap.has(siteName)) {
+                    const siteData = siteDataMap.get(siteName);
+                    if (siteData?.spec) {
+                        // Get connected REs
+                        const connectedREs = siteData.spec.connected_re || [];
+                        const configREs = siteData.spec.connected_re_for_config || [];
+                        
+                        // Create a set of config RE names for easy lookup
+                        const configRENames = new Set(configREs.map(re => re.name).filter(name => name));
+                        
+                        // Add all unique REs with appropriate labels
+                        const allRENames = new Set();
+                        
+                        // Add connected REs
+                        connectedREs.forEach(re => {
+                            if (re.name) {
+                                allRENames.add(re.name);
+                            }
+                        });
+                        
+                        // Add config REs
+                        configREs.forEach(re => {
+                            if (re.name) {
+                                allRENames.add(re.name);
+                            }
+                        });
+                        
+                        // Display REs with Config annotation where appropriate
+                        if (allRENames.size > 0) {
+                            const reList = Array.from(allRENames).map(reName => {
+                                if (configRENames.has(reName)) {
+                                    return `${reName} (Config)`;
+                                }
+                                return reName;
+                            });
+                            serverLabel += `<br>RE: ${reList.join(', ')}`;
+                        }
+                    }
+                }
+            } else if (siteLocator.virtual_site?.name) {
+                serverLabel += `<br>Virtual Site: ${siteLocator.virtual_site.name}`;
+            }
         }
 
         // Add port if specified in labels
@@ -1476,19 +1601,58 @@ function generateOriginServerNodes(originPoolData, poolID, sanitize) {
 }
 
 // Enhanced diagram generation based on CLI tool
-function generateMermaidDiagramEnhanced(lb, originPoolsData = []) {
-    return new Promise((resolve, reject) => {
+async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl = null, csrfToken = null, managedTenant = null) {
+    return new Promise(async (resolve, reject) => {
         try {
             const sanitize = (str) => str.replace(/[^a-zA-Z0-9]/g, '_');
             let diagram = '';
             let edges = 0;
             const wafAdded = new Map();
-            const poolToUpstream = new Map();
-            let nodeCount = 0;
+            let siteDataMap = new Map(); // Store fetched site data
 
             // Pre-compute security controls state to avoid reference errors
             let hasSecurityControls = false;
             let securityControlsContent = '';
+
+            // Collect all site names from origin pools upfront
+            const allSiteNames = new Set();
+            if (baseUrl && csrfToken) {
+                originPoolsData.forEach(pool => {
+                    const servers = pool.get_spec?.origin_servers || [];
+                    servers.forEach(server => {
+                        // Check all possible site locator locations
+                        let siteLocator = null;
+                        if (server.public_name?.site_locator) {
+                            siteLocator = server.public_name.site_locator;
+                        } else if (server.public_ip?.site_locator) {
+                            siteLocator = server.public_ip.site_locator;
+                        } else if (server.private_ip?.site_locator) {
+                            siteLocator = server.private_ip.site_locator;
+                        } else if (server.private_name?.site_locator) {
+                            siteLocator = server.private_name.site_locator;
+                        } else if (server.k8s_service?.site_locator) {
+                            siteLocator = server.k8s_service.site_locator;
+                        } else if (server.vk8s_service?.site_locator) {
+                            siteLocator = server.vk8s_service.site_locator;
+                        }
+                        
+                        // Collect site names (not virtual sites)
+                        if (siteLocator?.site?.name) {
+                            allSiteNames.add(siteLocator.site.name);
+                        }
+                    });
+                });
+
+                // Fetch all site data upfront
+                console.log(`🌐 [DIAGRAM] Found ${allSiteNames.size} unique sites to fetch data for`);
+                for (const siteName of allSiteNames) {
+                    const siteData = await fetchSiteData(siteName, baseUrl, csrfToken, managedTenant);
+                    if (siteData) {
+                        siteDataMap.set(siteName, siteData);
+                    }
+                }
+                console.log(`✅ [DIAGRAM] Fetched data for ${siteDataMap.size} sites`);
+            }
 
             // Determine Load Balancer Type
             let loadBalancerLabel = "Load Balancer";
@@ -1825,7 +1989,7 @@ function generateMermaidDiagramEnhanced(lb, originPoolsData = []) {
                         console.log(` [DIAGRAM] Found origin pool data for '${pool.pool.name}':`, originPoolData);
                         const serverCount = originPoolData.get_spec?.origin_servers?.length || 0;
                         const algorithm = originPoolData.get_spec?.loadbalancer_algorithm || 'round_robin';
-                        poolLabel += `<br>Servers: ${serverCount}<br>Algorithm: ${algorithm}`;
+                        poolLabel += `<br>Nodes: ${serverCount}<br>Algorithm: ${algorithm}`;
 
                         // Add additional pool info if available
                         if (originPoolData.get_spec?.port) {
@@ -1843,7 +2007,7 @@ function generateMermaidDiagramEnhanced(lb, originPoolsData = []) {
                     // Add origin servers if available
                     if (originPoolData?.get_spec?.origin_servers?.length > 0) {
                         console.log(`🔗 [DIAGRAM] Adding ${originPoolData.get_spec.origin_servers.length} servers for pool '${pool.pool.name}'`);
-                        diagram += generateOriginServerNodes(originPoolData, poolID, sanitize);
+                        diagram += generateOriginServerNodes(originPoolData, poolID, siteDataMap);
                     } else {
                         console.log(` [DIAGRAM] No origin servers to add for pool '${pool.pool.name}'`);
                     }
@@ -1901,7 +2065,7 @@ function generateMermaidDiagramEnhanced(lb, originPoolsData = []) {
                                 console.log(` [DIAGRAM] Found route pool data for '${pool.pool.name}':`, originPoolData);
                                 const serverCount = originPoolData.get_spec?.origin_servers?.length || 0;
                                 const algorithm = originPoolData.get_spec?.loadbalancer_algorithm || 'round_robin';
-                                poolLabel += `<br>Servers: ${serverCount}<br>Algorithm: ${algorithm}`;
+                                poolLabel += `<br>Nodes: ${serverCount}<br>Algorithm: ${algorithm}`;
 
                                 // Add additional pool info if available
                                 if (originPoolData.get_spec?.port) {
@@ -1928,7 +2092,7 @@ function generateMermaidDiagramEnhanced(lb, originPoolsData = []) {
                             // Add origin servers if available
                             if (originPoolData?.get_spec?.origin_servers?.length > 0) {
                                 console.log(`🔗 [DIAGRAM] Adding ${originPoolData.get_spec.origin_servers.length} servers for route pool '${pool.pool.name}'`);
-                                diagram += generateOriginServerNodes(originPoolData, poolIDName, sanitize);
+                                diagram += generateOriginServerNodes(originPoolData, poolIDName, siteDataMap);
                             } else {
                                 console.log(` [DIAGRAM] No origin servers to add for route pool '${pool.pool.name}'`);
                             }
@@ -1950,6 +2114,7 @@ function generateMermaidDiagramEnhanced(lb, originPoolsData = []) {
             for (let edge = 0; edge < edges; edge++) {
                 diagram += `    class e${edge} animate;\n`;
             }
+
 
             resolve(diagram);
         } catch (error) {
