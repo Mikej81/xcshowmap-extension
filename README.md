@@ -47,12 +47,13 @@ A Chrome extension that generates interactive traffic flow diagrams from F5 Dist
      - Managed tenant: `https://*.console.ves.volterra.io/managed_tenant/{tenant}/web/workspaces/multi-cloud-app-connect/namespaces/{namespace}/manage/load_balancers/http_loadbalancers`
 
 2. **Interact with the Page**
-   - Refresh the page or navigate within the console to capture CSRF tokens
+   - Refresh the page to capture CSRF tokens and enable the extension
    - The extension automatically detects both regular and managed tenant contexts
+   - Load balancers will populate automatically when conditions are met
 
 3. **Generate Flow Diagrams**
    - Click the extension icon in the toolbar
-   - Select a load balancer from the dropdown
+   - Select a load balancer from the dropdown (populates automatically)
    - Click "Generate Diagram"
    - A new tab will open with the interactive Mermaid diagram
 
@@ -61,16 +62,18 @@ A Chrome extension that generates interactive traffic flow diagrams from F5 Dist
 - **Tab-Specific Data Isolation**: Each browser tab maintains separate data
 - **Managed Tenant Support**: Automatic detection and handling of managed tenant contexts
 - **Advanced CSRF Token Detection**: Multiple detection methods for robust authentication
-- **Interactive Diagrams**: Horizontal flow charts with certificate status, security controls, and routing details
+- **Direct API Integration**: Efficient API calls without page interference or rate limiting issues
+- **Interactive Diagrams**: Horizontal flow charts with certificate status, security controls, origin pools, and routing details
+- **Smart Security Controls**: Only displays enabled/configured security features with simplified grouping
 - **Debug Logging**: Comprehensive logging system for troubleshooting
 
 ## 🔧 Troubleshooting
 
 ### Common Issues
 
-1. **"Missing CSRF Token" Error**
-   - **Solution**: Refresh the F5XC console page or navigate to trigger API requests
-   - The extension needs to capture authentication tokens from network requests
+1. **"Please refresh page" Message**
+   - **Solution**: Refresh the F5XC console page to capture authentication tokens
+   - The extension needs to capture CSRF tokens from the initial page load
 
 2. **"No Load Balancers Found" Error**
    - **Solution**: Ensure you're on the correct load balancers page
@@ -125,10 +128,12 @@ The extension uses intelligent token detection:
 Generated diagrams include:
 
 - **Load Balancer Type**: Public vs Private classification
-- **Certificate Status**: Valid, expiring, or expired certificates
-- **Security Controls**: WAF, service policies, API protection, bot defense
+- **Certificate Status**: Valid, expiring, or expired certificates with expiration dates
+- **Security Controls**: Common Security Controls grouped (Service Policies, IP Reputation, User ID, etc.) - only shows enabled features
+- **API Protection & Bot Defense**: Additional security layers when configured
+- **WAF Protection**: Web application firewall settings when enabled
 - **Routing Logic**: Default routes, path-based routing, redirects
-- **Origin Pools**: Backend service destinations
+- **Origin Pools**: Backend service destinations with server details and health status
 
 ## Permissions Required
 
