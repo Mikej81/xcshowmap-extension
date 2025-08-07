@@ -1,6 +1,6 @@
 # XC Service Flow Mapper - Chrome Extension
 
-A Chrome extension that generates interactive traffic flow diagrams from F5 Distributed Cloud console API responses, helping visualize load balancer configurations, security policies, and routing rules.
+A Chrome extension that generates interactive traffic flow diagrams from F5 Distributed Cloud (XC) Console API responses, helping visualize load balancer configurations, security policies, and routing rules.
 
 ## Installation
 
@@ -42,6 +42,7 @@ A Chrome extension that generates interactive traffic flow diagrams from F5 Dist
 1. **Navigate to Load Balancers**
    - Go to your F5 Distributed Cloud console
    - Navigate to: `Web Workspaces → Multi-Cloud App Connect → Load Balancers → HTTP Load Balancers`
+   - (Ensure you are in the correct namespace)
    - **Supported URL patterns:**
      - Regular tenant: `https://*.console.ves.volterra.io/web/workspaces/multi-cloud-app-connect/namespaces/{namespace}/manage/load_balancers/http_loadbalancers`
      - Managed tenant: `https://*.console.ves.volterra.io/managed_tenant/{tenant}/web/workspaces/multi-cloud-app-connect/namespaces/{namespace}/manage/load_balancers/http_loadbalancers`
@@ -57,17 +58,7 @@ A Chrome extension that generates interactive traffic flow diagrams from F5 Dist
    - Click "Generate Diagram"
    - A new tab will open with the interactive Mermaid diagram
 
-### Features
-
-- **Tab-Specific Data Isolation**: Each browser tab maintains separate data
-- **Managed Tenant Support**: Automatic detection and handling of managed tenant contexts
-- **Advanced CSRF Token Detection**: Multiple detection methods for robust authentication
-- **Direct API Integration**: Efficient API calls without page interference or rate limiting issues
-- **Interactive Diagrams**: Horizontal flow charts with certificate status, security controls, origin pools, and routing details
-- **Smart Security Controls**: Only displays enabled/configured security features with simplified grouping
-- **Debug Logging**: Comprehensive logging system for troubleshooting
-
-## 🔧 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
@@ -108,20 +99,10 @@ For immediate debugging, check the browser console:
 - **Service Worker Console**: `chrome://extensions/` → Click "service worker" under the extension
 - **Content Script Console**: F12 Developer Tools on the F5XC console page
 
-## Architecture
-
-### Supported Contexts
+## Supported Contexts
 
 - **Regular Tenants**: Standard F5 Distributed Cloud console access
 - **Managed Tenants**: Multi-tenant service provider scenarios with separate authentication
-
-### CSRF Token Handling
-
-The extension uses intelligent token detection:
-
-- **Regular Context**: Uses top-level CSRF tokens
-- **Managed Tenant Context**: Prefers managed tenant CSRF tokens, falls back to top-level
-- **Detection Methods**: URL parameters, response headers, cookies, request headers
 
 ### Diagram Features
 
@@ -145,15 +126,6 @@ The extension requires these permissions:
 - **tabs**: Manage tab-specific data isolation
 - **downloads**: Export debug logs
 - **Host permissions**: Access to `*.console.ves.volterra.io`
-
-## Contributing
-
-This extension is designed for F5 Distributed Cloud console integration. When contributing:
-
-1. Test with both regular and managed tenant scenarios
-2. Ensure tab isolation works correctly
-3. Verify CSRF token detection across different authentication methods
-4. Test diagram generation with various load balancer configurations
 
 ## License
 
