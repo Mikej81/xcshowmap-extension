@@ -5,3 +5,4 @@ showmap_ref.go
 *.zip
 logs
 test_security_features.js
+.DS_Store
