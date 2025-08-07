@@ -1,6 +1,8 @@
 http_loadbalancers.json
 origin_pools.json
+example_ce.json
 showmap_ref.go
 *.zip
 logs
 test_security_features.js
+.DS_Store
