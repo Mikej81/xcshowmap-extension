@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Check Mermaid Version</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .version-info {
+            background: #f0f0f0;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .error {
+            color: red;
+        }
+        .success {
+            color: green;
+        }
+        button {
+            padding: 10px 15px;
+            margin: 5px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <h1>Mermaid.js Version Checker</h1>
+    
+    <div id="current-version" class="version-info">
+        <h3>Current Version in Project:</h3>
+        <p id="current-ver">Loading...</p>
+    </div>
+    
+    <div id="latest-version" class="version-info">
+        <h3>Latest Version on GitHub:</h3>
+        <p id="latest-ver">Click button to check</p>
+    </div>
+    
+    <button onclick="checkLatestVersion()">Check Latest Version</button>
+    
+    <div id="instructions" class="version-info">
+        <h3>How to Update:</h3>
+        <ol>
+            <li>Visit <a href="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js" target="_blank">https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js</a></li>
+            <li>Or download specific version: <code>https://cdn.jsdelivr.net/npm/mermaid@11.9.0/dist/mermaid.min.js</code></li>
+            <li>Save the file as <code>mermaid.min.js</code> in the xcshowmap-extension directory</li>
+            <li>Test the extension to ensure compatibility</li>
+        </ol>
+    </div>
+
+    <script src="xcshowmap-extension/mermaid.min.js"></script>
+    <script>
+        // Try to detect current version
+        window.onload = function() {
+            if (typeof mermaid !== 'undefined') {
+                // Try to get version from mermaid object
+                if (mermaid.version) {
+                    document.getElementById('current-ver').innerHTML = `<span class="success">Version: ${mermaid.version}</span>`;
+                } else if (mermaid.mermaidAPI && mermaid.mermaidAPI.getConfig) {
+                    const config = mermaid.mermaidAPI.getConfig();
+                    if (config && config.version) {
+                        document.getElementById('current-ver').innerHTML = `<span class="success">Version: ${config.version}</span>`;
+                    } else {
+                        document.getElementById('current-ver').innerHTML = '<span class="error">Version info not available in minified file. File is loaded but version cannot be determined.</span>';
+                    }
+                } else {
+                    document.getElementById('current-ver').innerHTML = '<span class="error">Mermaid loaded but version info not accessible</span>';
+                }
+            } else {
+                document.getElementById('current-ver').innerHTML = '<span class="error">Mermaid.js not loaded</span>';
+            }
+        };
+        
+        async function checkLatestVersion() {
+            try {
+                document.getElementById('latest-ver').innerHTML = 'Checking...';
+                
+                // Fetch latest release info from GitHub API
+                const response = await fetch('https://api.github.com/repos/mermaid-js/mermaid/releases/latest');
+                const data = await response.json();
+                
+                if (data.tag_name) {
+                    const version = data.tag_name.replace('mermaid@', '').replace('v', '');
+                    document.getElementById('latest-ver').innerHTML = `
+                        <span class="success">Latest Version: ${version}</span><br>
+                        <small>Released: ${new Date(data.published_at).toLocaleDateString()}</small><br>
+                        <a href="${data.html_url}" target="_blank">View Release Notes</a>
+                    `;
+                    
+                    // Update download link with latest version
+                    document.getElementById('instructions').innerHTML += `
+                        <div style="margin-top: 10px; padding: 10px; background: #e8f5e9;">
+                            <strong>Latest version download:</strong><br>
+                            <code>https://cdn.jsdelivr.net/npm/mermaid@${version}/dist/mermaid.min.js</code>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                document.getElementById('latest-ver').innerHTML = `<span class="error">Error fetching latest version: ${error.message}</span>`;
+            }
+        }
+    </script>
+</body>
+</html>
