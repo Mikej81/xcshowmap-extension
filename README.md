@@ -1,6 +1,6 @@
 # XC Service Flow Mapper - Chrome Extension
 
-A Chrome extension that generates interactive traffic flow diagrams from F5 Distributed Cloud (XC) Console API responses, helping visualize load balancer configurations, security policies, and routing rules.
+A Chrome extension that generates traffic flow diagrams from F5 Distributed Cloud (XC), helping visualize load balancer configurations, security policies, and routing rules.
 
 ## Installation
 
@@ -9,8 +9,8 @@ A Chrome extension that generates interactive traffic flow diagrams from F5 Dist
 1. **Download/Clone the Repository**
 
    ```bash
-   git clone https://github.com/your-repo/xcshowmap_chrome.git
-   cd xcshowmap_chrome
+   git clone https://github.com/your-repo/xcshowmap-extension.git
+   cd xcshowmap-extension
    ```
 
 2. **Open Chrome Extensions Page**
@@ -120,12 +120,15 @@ Generated diagrams include:
 
 The extension requires these permissions:
 
+- **debugger**: Advanced debugging capabilities for network request monitoring
+- **storage**: Store tab-specific data and configuration
+- **contextMenus**: Right-click context menu integration
 - **activeTab**: Access current tab for data extraction
-- **storage**: Store tab-specific data
 - **webRequest**: Monitor network requests for CSRF tokens
 - **tabs**: Manage tab-specific data isolation
 - **downloads**: Export debug logs
-- **Host permissions**: Access to `*.console.ves.volterra.io`
+- **scripting**: Inject content scripts into web pages
+- **Host permissions**: Access to `*.console.ves.volterra.io` and API endpoints
 
 ## License
 
