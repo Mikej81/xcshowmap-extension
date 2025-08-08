@@ -1,0 +1,84 @@
+name: Create Release on Version Change
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'xcshowmap-extension/manifest.json'
+
+jobs:
+  check-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      
+      - name: Get version from manifest.json
+        id: get_version
+        run: |
+          VERSION=$(jq -r '.version' xcshowmap-extension/manifest.json)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Current version: $VERSION"
+      
+      - name: Check if version changed
+        id: check_version_change
+        run: |
+          git diff HEAD^ HEAD -- xcshowmap-extension/manifest.json | grep -q '"version"' && echo "changed=true" >> $GITHUB_OUTPUT || echo "changed=false" >> $GITHUB_OUTPUT
+      
+      - name: Check if release exists
+        id: check_release
+        if: steps.check_version_change.outputs.changed == 'true'
+        run: |
+          VERSION=${{ steps.get_version.outputs.version }}
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Release v$VERSION already exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Release v$VERSION does not exist"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      
+      - name: Create ZIP archive
+        if: steps.check_version_change.outputs.changed == 'true' && steps.check_release.outputs.exists == 'false'
+        run: |
+          VERSION=${{ steps.get_version.outputs.version }}
+          cd xcshowmap-extension
+          zip -r ../xcshowmap-$VERSION.zip . -x "*.git*" -x "*node_modules*" -x "*.DS_Store"
+          cd ..
+          echo "Archive created: xcshowmap-$VERSION.zip"
+          ls -la xcshowmap-$VERSION.zip
+      
+      - name: Create Release
+        if: steps.check_version_change.outputs.changed == 'true' && steps.check_release.outputs.exists == 'false'
+        run: |
+          VERSION=${{ steps.get_version.outputs.version }}
+          CHANGELOG=$(git log -1 --pretty=format:"%s%n%n%b" -- xcshowmap-extension/manifest.json)
+          
+          gh release create "v$VERSION" \
+            --title "XC Service Flow Mapper v$VERSION" \
+            --notes "## Release v$VERSION
+          
+          ### What's Changed
+          $CHANGELOG
+          
+          ### Installation
+          1. Download the \`xcshowmap-$VERSION.zip\` file below
+          2. Extract the ZIP file to a folder
+          3. Open Chrome and navigate to \`chrome://extensions/\`
+          4. Enable Developer Mode
+          5. Click \"Load unpacked\" and select the extracted folder
+          
+          ### Chrome Web Store
+          This extension may also be available on the Chrome Web Store." \
+            xcshowmap-$VERSION.zip
+        env:
+          GH_TOKEN: ${{ github.token }}
