@@ -1,6 +1,7 @@
 http_loadbalancers.json
 origin_pools.json
 example_ce.json
+cdn_lb.json
 showmap_ref.go
 *.zip
 logs
