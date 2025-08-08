@@ -6,12 +6,14 @@ A Chrome extension that generates traffic flow diagrams from F5 Distributed Clou
 
 ### Install as Unpacked Extension (Development Mode)
 
-1. **Download/Clone the Repository**
+1. **Download/Clone the Repository or Download latest Release**
 
    ```bash
    git clone https://github.com/your-repo/xcshowmap-extension.git
    cd xcshowmap-extension
    ```
+
+   Download Release [https://github.com/Mikej81/xcshowmap-extension/releases](https://github.com/Mikej81/xcshowmap-extension/releases)
 
 2. **Open Chrome Extensions Page**
    - Navigate to `chrome://extensions/` in your Chrome browser
