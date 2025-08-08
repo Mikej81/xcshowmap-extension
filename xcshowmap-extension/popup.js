@@ -33,7 +33,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     console.log(`📌 [POPUP] Extracted namespace: ${namespaceMatch[1]}`);
                     resolve(namespaceMatch[1]);
                 } else {
-                    console.log(`⚠️ [POPUP] No valid namespace found in URL`);
+                    console.log(`[POPUP] No valid namespace found in URL`);
                     resolve(null);
                 }
             });
@@ -42,7 +42,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Direct API fetch through background script
     async function fetchLoadBalancersDirect() {
-        console.log(`🔄 [POPUP] Starting direct API fetch at ${new Date().toISOString()}`);
+        console.log(`[POPUP] Starting direct API fetch at ${new Date().toISOString()}`);
 
         // Extract namespace from URL
         currentNamespace = await extractNamespace();
@@ -58,7 +58,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const tabId = tabs[0]?.id;
 
             if (!tabId) {
-                console.error(`❌ [POPUP] No active tab found`);
+                console.error(`[POPUP] No active tab found`);
                 loadBalancerSelect.innerHTML = '<option value="" disabled selected>Error: Please refresh page</option>';
                 return;
             }
@@ -71,13 +71,13 @@ document.addEventListener("DOMContentLoaded", () => {
             }, (response) => {
 
                 if (chrome.runtime.lastError) {
-                    console.error(`❌ [POPUP] Runtime error:`, chrome.runtime.lastError);
-                    loadBalancerSelect.innerHTML = `<option value="" disabled selected>❌ ${chrome.runtime.lastError.message}</option>`;
+                    console.error(`[POPUP] Runtime error:`, chrome.runtime.lastError);
+                    loadBalancerSelect.innerHTML = `<option value="" disabled selected>Error: ${chrome.runtime.lastError.message}</option>`;
                     return;
                 }
 
                 if (!response?.success) {
-                    console.error(`❌ [POPUP] API fetch failed:`, response?.error);
+                    console.error(`[POPUP] API fetch failed:`, response?.error);
                     if (response?.error?.includes('CSRF')) {
                         loadBalancerSelect.innerHTML = '<option value="" disabled selected>Please refresh page.</option>';
                     } else {
@@ -91,7 +91,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     return;
                 }
 
-                console.log(`✅ [POPUP] Received ${response.loadBalancers.length} load balancers`);
+                console.log(`[POPUP] Received ${response.loadBalancers.length} load balancers`);
                 populateLoadBalancers(response.loadBalancers);
             });
         });
@@ -118,7 +118,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // Check initial state and auto-load if possible
     chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
         if (tabs[0] && tabs[0].url && tabs[0].url.includes('console.ves.volterra.io')) {
-            console.log(`✅ [POPUP] On F5XC console page`);
+            console.log(`[POPUP] On F5XC console page`);
 
             // Check if we have a namespace in the URL
             const namespace = await extractNamespace();
@@ -137,12 +137,12 @@ document.addEventListener("DOMContentLoaded", () => {
                     // Auto-load data since we have everything we need
                     fetchLoadBalancersDirect();
                 } else {
-                    console.log(`⚠️ [POPUP] No CSRF token yet, user needs to log in`);
+                    console.log(`[POPUP] No CSRF token yet, user needs to log in`);
                     loadBalancerSelect.innerHTML = '<option value="" disabled selected>Please refresh page to log in</option>';
                 }
             });
         } else {
-            console.log(`⚠️ [POPUP] Not on F5XC console page`);
+            console.log(`[POPUP] Not on F5XC console page`);
             loadBalancerSelect.innerHTML = '<option value="" disabled selected>Navigate to F5XC console</option>';
         }
     });
@@ -173,7 +173,7 @@ document.addEventListener("DOMContentLoaded", () => {
             loadBalancerSelect.appendChild(option);
         });
 
-        console.log(`✅ [POPUP] Successfully populated dropdown`);
+        console.log(`[POPUP] Successfully populated dropdown`);
     }
 
     loadBalancerSelect.addEventListener("change", () => {
@@ -191,7 +191,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const lbData = loadBalancers[selectedLB];
 
-        console.log("📨 Sending Load Balancer Data for Mermaid:", lbData);
+        console.log("Sending Load Balancer Data for Mermaid:", lbData);
 
         // Get current tab ID to pass to background script
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -204,7 +204,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 tabId: currentTabId
             }, (response) => {
                 if (response && response.mermaidDiagram) {
-                    console.log("🖼️ Received Mermaid Diagram");
+                    console.log("Received Mermaid Diagram");
                 } else {
                     alert("Failed to generate Mermaid Diagram");
                 }
@@ -216,10 +216,10 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("downloadLogsBtn").addEventListener("click", () => {
         chrome.runtime.sendMessage({ action: "downloadLogs" }, (response) => {
             if (response?.success) {
-                console.log("✅ Debug logs download initiated");
+                console.log("Debug logs download initiated");
             } else {
-                console.error("❌ Failed to download logs");
-                alert("❌ Failed to download logs");
+                console.error("Failed to download logs");
+                alert("Failed to download logs");
             }
         });
     });

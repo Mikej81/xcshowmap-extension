@@ -151,7 +151,7 @@ class ExtensionLogger {
         }
 
         // Log to console for immediate debugging (but don't store large data)
-        console.log(`🌐 [API] ${method} ${url}`, {
+        console.log(`[API] ${method} ${url}`, {
             tabId: tabId,
             statusCode: responseData?.statusCode,
             dataSize: apiLogEntry.dataSize,
@@ -523,7 +523,7 @@ chrome.webRequest.onBeforeRequest.addListener(
         if (details.url.includes("console.ves.volterra.io") &&
             (details.url.includes("/api/") || details.url.includes("/api"))) {
 
-            console.log(`🌐 [API-INTERCEPT] ${details.method} ${details.url}`, {
+            console.log(`[API-INTERCEPT] ${details.method} ${details.url}`, {
                 tabId: details.tabId,
                 type: details.type,
                 timeStamp: details.timeStamp
@@ -834,6 +834,69 @@ async function extractCsrfFromCurrentPage(tabId) {
     return null;
 }
 
+// Function to fetch CDN load balancers for a namespace
+async function fetchCDNLoadBalancers(tabId, namespace) {
+    console.log(`[BACKGROUND] Fetching CDN load balancers for namespace: ${namespace}`);
+    
+    const tabInfo = tabData[tabId];
+    if (!tabInfo) {
+        console.log('[BACKGROUND] No tab data found for CDN fetch');
+        return [];
+    }
+
+    // Get the current tab URL to determine the base URL
+    const tab = await chrome.tabs.get(tabId);
+    const url = new URL(tab.url);
+    const baseUrl = url.origin;
+
+    // Determine if we're in managed tenant context
+    const managedTenantMatch = tab.url.match(/\/managed_tenant\/([^\/]+)/);
+    const managedTenant = managedTenantMatch ? managedTenantMatch[1] : null;
+
+    // Use appropriate CSRF token
+    let csrfToken = null;
+    if (managedTenant && tabInfo.managed_tenant_csrf) {
+        csrfToken = tabInfo.managed_tenant_csrf;
+    } else if (tabInfo.csrf_token) {
+        csrfToken = tabInfo.csrf_token;
+    } else {
+        console.log('[BACKGROUND] No CSRF token available for CDN fetch');
+        return [];
+    }
+
+    // Construct API URL for CDN load balancers
+    let apiUrl;
+    if (managedTenant) {
+        apiUrl = `${baseUrl}/managed_tenant/${managedTenant}/api/config/namespaces/${namespace}/cdn_loadbalancers?report_fields&csrf=${csrfToken}`;
+    } else {
+        apiUrl = `${baseUrl}/api/config/namespaces/${namespace}/cdn_loadbalancers?report_fields&csrf=${csrfToken}`;
+    }
+
+    console.log(`[BACKGROUND] Fetching CDN load balancers from: ${apiUrl}`);
+
+    try {
+        const response = await fetch(apiUrl, {
+            credentials: 'include',
+            headers: {
+                'Accept': 'application/json',
+                'X-CSRF-Token': csrfToken
+            }
+        });
+
+        if (!response.ok) {
+            console.log(`[BACKGROUND] CDN API returned ${response.status}: ${response.statusText}`);
+            return [];
+        }
+
+        const data = await response.json();
+        console.log(`[BACKGROUND] Received ${data.items?.length || 0} CDN load balancers`);
+        return data.items || [];
+    } catch (error) {
+        console.error('[BACKGROUND] Error fetching CDN load balancers:', error);
+        return [];
+    }
+}
+
 // Function to fetch origin pools for a specific load balancer
 async function fetchOriginPoolsForLoadBalancer(tabId, namespace, loadBalancer) {
     console.log(` [BACKGROUND] Fetching origin pools for load balancer: ${loadBalancer.name}`);
@@ -903,7 +966,7 @@ async function fetchOriginPoolsForLoadBalancer(tabId, namespace, loadBalancer) {
         apiUrl = `${baseUrl}/api/config/namespaces/${namespace}/origin_pools?report_fields&csrf=${csrfToken}`;
     }
 
-    console.log(`🌐 [BACKGROUND] Fetching origin pools from: ${apiUrl}`);
+    console.log(`[BACKGROUND] Fetching origin pools from: ${apiUrl}`);
 
     try {
         const response = await fetch(apiUrl, {
@@ -949,7 +1012,7 @@ async function fetchOriginPoolsForLoadBalancer(tabId, namespace, loadBalancer) {
 
 // Direct API fetching function
 async function fetchLoadBalancersDirectly(tabId, namespace) {
-    console.log(`🌐 [BACKGROUND] Direct API fetch for namespace: ${namespace}`);
+    console.log(`[BACKGROUND] Direct API fetch for namespace: ${namespace}`);
 
     const tabInfo = tabData[tabId];
     if (!tabInfo) {
@@ -1352,16 +1415,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
                 console.log(` [BACKGROUND] Extracted namespace: ${namespace} from URL: ${tab.url}`);
 
-                // First fetch origin pools, then generate diagram
-                fetchOriginPoolsForLoadBalancer(tabId, namespace, lbObject)
-                    .then(result => {
-                        console.log("🎆 Fetched origin pools, generating enhanced diagram");
+                // First fetch origin pools and CDN load balancers, then generate diagram
+                Promise.all([
+                    fetchOriginPoolsForLoadBalancer(tabId, namespace, lbObject),
+                    fetchCDNLoadBalancers(tabId, namespace)
+                ])
+                    .then(([poolResult, cdnLoadBalancers]) => {
+                        console.log("Fetched origin pools and CDN data, generating enhanced diagram");
                         return generateMermaidDiagramEnhanced(
                             lbObject,
-                            result.pools,
-                            result.baseUrl,
-                            result.csrfToken,
-                            result.managedTenant
+                            poolResult.pools,
+                            poolResult.baseUrl,
+                            poolResult.csrfToken,
+                            poolResult.managedTenant,
+                            cdnLoadBalancers
                         );
                     })
                     .then(mermaidDiagram => {
@@ -1371,13 +1438,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
                         console.log("**Generated Enhanced Mermaid Diagram with Origin Pools:**\n", mermaidDiagram);
 
-                        //  Encode the diagram and open a new tab
-                        const encodedDiagram = encodeURIComponent(mermaidDiagram);
-                        const diagramUrl = `chrome-extension://${chrome.runtime.id}/mermaid.html?diagram=${encodedDiagram}`;
-
-                        chrome.tabs.create({ url: diagramUrl });
-
-                        sendResponse({ mermaidDiagram });
+                        // Store the diagram in chrome storage and open tab with ID
+                        try {
+                            console.log('[BACKGROUND] Storing diagram in chrome.storage, length:', mermaidDiagram.length);
+                            
+                            // Generate a unique ID for this diagram
+                            const diagramId = 'diagram_' + Date.now() + '_' + Math.random().toString(36).substring(2, 11);
+                            
+                            // Store the raw diagram in chrome storage (no encoding needed)
+                            const storageData = {};
+                            storageData[diagramId] = {
+                                diagram: mermaidDiagram,
+                                timestamp: Date.now()
+                            };
+                            
+                            chrome.storage.local.set(storageData, () => {
+                                if (chrome.runtime.lastError) {
+                                    console.error('[BACKGROUND] Failed to store diagram:', chrome.runtime.lastError);
+                                    sendResponse({ error: 'Failed to store diagram' });
+                                    return;
+                                }
+                                
+                                console.log('[BACKGROUND] Diagram stored successfully with ID:', diagramId);
+                                
+                                // Open mermaid.html with the storage ID
+                                const diagramUrl = `chrome-extension://${chrome.runtime.id}/mermaid.html?storageId=${diagramId}`;
+                                chrome.tabs.create({ url: diagramUrl });
+                                
+                            });
+                        } catch (storageError) {
+                            console.error('[BACKGROUND] Error with storage approach:', storageError);
+                            sendResponse({ error: 'Failed to handle diagram storage' });
+                        }
                     })
                     .catch(error => {
                         console.error("Error in generating Enhanced Mermaid Diagram:", error);
@@ -1443,7 +1535,7 @@ async function generateMermaidDiagramWithOriginPools(lb, tabId) {
 
             // Call the original diagram generation with origin pools data
             // Note: We don't have baseUrl, csrfToken, managedTenant here, so RE connections won't be added
-            const diagram = await generateMermaidDiagramEnhanced(lb, originPoolsData, null, null, null);
+            const diagram = await generateMermaidDiagramEnhanced(lb, originPoolsData, null, null, null, []);
             resolve(diagram);
 
         } catch (error) {
@@ -1467,7 +1559,7 @@ async function fetchSiteData(siteName, baseUrl, csrfToken, managedTenant) {
         apiUrl = `${baseUrl}/api/config/namespaces/system/sites/${siteName}?csrf=${csrfToken}`;
     }
 
-    console.log(`🌐 [BACKGROUND] Fetching site data for: ${siteName}`);
+    console.log(`[BACKGROUND] Fetching site data for: ${siteName}`);
 
     try {
         const response = await fetch(apiUrl, {
@@ -1608,7 +1700,7 @@ function generateOriginServerNodes(originPoolData, poolID, siteDataMap = null, r
 }
 
 // Enhanced diagram generation based on CLI tool
-async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl = null, csrfToken = null, managedTenant = null) {
+async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl = null, csrfToken = null, managedTenant = null, cdnLoadBalancers = []) {
     return new Promise(async (resolve, reject) => {
         try {
             const sanitize = (str) => str.replace(/[^a-zA-Z0-9]/g, '_');
@@ -1651,14 +1743,14 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                 });
 
                 // Fetch all site data upfront
-                console.log(`🌐 [DIAGRAM] Found ${allSiteNames.size} unique sites to fetch data for`);
+                console.log(`[DIAGRAM] Found ${allSiteNames.size} unique sites to fetch data for`);
                 for (const siteName of allSiteNames) {
                     const siteData = await fetchSiteData(siteName, baseUrl, csrfToken, managedTenant);
                     if (siteData) {
                         siteDataMap.set(siteName, siteData);
                     }
                 }
-                console.log(`✅ [DIAGRAM] Fetched data for ${siteDataMap.size} sites`);
+                console.log(`[DIAGRAM] Fetched data for ${siteDataMap.size} sites`);
             }
 
             // Determine Load Balancer Type
@@ -1840,7 +1932,7 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
 
             // Create the security controls subgraph if there are controls to show
             if (hasSecurityControls) {
-                diagram += `    subgraph CommonSecurityControls ["**Common Security Controls**"]\n`;
+                diagram += `    subgraph CommonSecurityControls ["**Common&nbsp;Security&nbsp;Controls**"]\n`;
                 diagram += `        direction TB\n`;
                 diagram += securityControlsContent;
                 diagram += `    end\n`;
@@ -2150,6 +2242,102 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                         edges++;
                     }
                 });
+            }
+
+            // CDN Flow Rendering (disconnected from main flow)
+            if (cdnLoadBalancers && cdnLoadBalancers.length > 0) {
+                console.log(`[DIAGRAM] Processing ${cdnLoadBalancers.length} CDN load balancers`);
+                
+                try {
+                    // Check for CDN in front of load balancer
+                    const lbDomains = lb.get_spec?.domains || [];
+                    
+                    cdnLoadBalancers.forEach((cdn, cdnIndex) => {
+                        if (!cdn || !cdn.get_spec) return; // Skip invalid CDN configs
+                        
+                        const cdnOriginDomain = cdn.get_spec?.origin_pool?.public_name?.dns_name || 
+                                               cdn.get_spec?.origin_pool?.origin_servers?.[0]?.public_name?.dns_name;
+                        
+                        // Check if this CDN points to our load balancer
+                        const isCDNInFront = cdnOriginDomain && lbDomains.includes(cdnOriginDomain);
+                    
+                    if (isCDNInFront) {
+                        // CDN in front of load balancer flow
+                        const cdnNodeId = `cdn_front_${sanitize(cdn.name)}`;
+                        const cdnDomains = cdn.get_spec?.domains || [];
+                        // Escape domain names to prevent Mermaid syntax errors and URL encoding issues
+                        const escapedDomains = cdnDomains.map(d => d ? d.replace(/[<>\"'&%]/g, '') : '').join(', ');
+                        const escapedOriginDomain = cdnOriginDomain ? cdnOriginDomain.replace(/[<>\"'&%]/g, '') : 'Unknown';
+                        const escapedCDNName = cdn.name ? cdn.name.replace(/[<>\"'&%]/g, '') : 'Unknown CDN';
+                        
+                        diagram += `\n    %% CDN in front of Load Balancer\n`;
+                        diagram += `    User2[User] --> ${cdnNodeId};\n`;
+                        diagram += `    ${cdnNodeId}["**CDN: ${escapedCDNName}**<br>Domains: ${escapedDomains}<br>Cache TTL: ${cdn.get_spec?.default_cache_action?.cache_ttl_default || 'default'}"];\n`;
+                        
+                        // Show cache rules if present
+                        if (cdn.get_spec?.cache_rules?.length > 0) {
+                            const cacheRuleId = `cache_rules_${cdnIndex}`;
+                            diagram += `    ${cdnNodeId} --> ${cacheRuleId}["**Cache Rules**<br>${cdn.get_spec.cache_rules.length} rules configured"];\n`;
+                            diagram += `    ${cacheRuleId} --> cdn_origin_${cdnIndex}["**Origin**<br>${escapedOriginDomain}<br>(Points to Load Balancer)"];\n`;
+                        } else {
+                            diagram += `    ${cdnNodeId} --> cdn_origin_${cdnIndex}["**Origin**<br>${escapedOriginDomain}<br>(Points to Load Balancer)"];\n`;
+                        }
+                        
+                        diagram += `    style ${cdnNodeId} fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px;\n`;
+                    }
+                });
+                
+                // Check for CDN off load balancer routes
+                if (lb.get_spec?.routes) {
+                    lb.get_spec.routes.forEach((route, routeIndex) => {
+                        if (route.simple_route?.origin_pools) {
+                            route.simple_route.origin_pools.forEach(pool => {
+                                // Check if pool name suggests CDN usage
+                                if (pool.pool.name.toLowerCase().includes('cdn') || 
+                                    pool.pool.name.toLowerCase().includes('cache')) {
+                                    
+                                    const cdnRouteId = `cdn_route_${routeIndex}_${sanitize(pool.pool.name)}`;
+                                    
+                                    // Create a disconnected CDN route flow (without User/LoadBalancer since main flow covers that)
+                                    diagram += `\n    %% CDN off Load Balancer Route\n`;
+                                    
+                                    let pathMatch = '';
+                                    if (route.simple_route.path?.regex) {
+                                        // Escape regex special characters for Mermaid and URL encoding
+                                        const escapedRegex = route.simple_route.path.regex.replace(/[<>\"'&%]/g, '');
+                                        pathMatch = `<br>Path: ${escapedRegex}`;
+                                    } else if (route.simple_route.path?.prefix) {
+                                        const escapedPrefix = route.simple_route.path.prefix.replace(/[<>\"'&%]/g, '');
+                                        pathMatch = `<br>Path: ${escapedPrefix}`;
+                                    }
+                                    
+                                    const escapedPoolName = pool.pool.name ? pool.pool.name.replace(/[<>\"'&%]/g, '') : 'Unknown Pool';
+                                    diagram += `    ${cdnRouteId}["**CDN Route**${pathMatch}<br>Pool: ${escapedPoolName}"];\n`;
+                                    diagram += `    style ${cdnRouteId} fill:#E6F3FF,stroke:#4169E1,stroke-width:2px;\n`;
+                                    
+                                    // Find the actual origin pool data for this CDN pool
+                                    const cdnPoolData = originPoolsData.find(p => p.name === pool.pool.name);
+                                    if (cdnPoolData?.get_spec?.origin_servers) {
+                                        const cdnOriginId = `cdn_route_origin_${routeIndex}`;
+                                        const originServer = cdnPoolData.get_spec.origin_servers[0];
+                                        let originName = originServer.public_name?.dns_name || 
+                                                       originServer.public_ip?.ip || 
+                                                       originServer.private_name?.dns_name || 
+                                                       'Unknown Origin';
+                                        
+                                        // Escape origin name for Mermaid and URL encoding
+                                        const escapedOriginName = originName.replace(/[<>\"'&%]/g, '');
+                                        diagram += `    ${cdnRouteId} --> ${cdnOriginId}["**CDN Origin**<br>${escapedOriginName}"];\n`;
+                                    }
+                                }
+                            });
+                        }
+                    });
+                }
+                } catch (cdnError) {
+                    console.error('[DIAGRAM] Error rendering CDN flows:', cdnError);
+                    // Continue with diagram generation even if CDN rendering fails
+                }
             }
 
             // Apply animation to all regular edges (restored for Mermaid v11.7+)
