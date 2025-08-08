@@ -1,5 +1,5 @@
 document.addEventListener("DOMContentLoaded", () => {
-    console.log(`🚀 [POPUP] Extension popup loaded at ${new Date().toISOString()}`);
+    console.log(`[POPUP] Extension popup loaded at ${new Date().toISOString()}`);
 
     const loadBalancerSelect = document.getElementById("loadBalancerSelect");
     const generateButton = document.getElementById("generateBtn");
@@ -30,7 +30,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const namespaceMatch = url.match(/\/namespaces\/([^\/]+)/);
 
                 if (namespaceMatch && namespaceMatch[1] !== 'system') {
-                    console.log(`📌 [POPUP] Extracted namespace: ${namespaceMatch[1]}`);
+                    console.log(`[POPUP] Extracted namespace: ${namespaceMatch[1]}`);
                     resolve(namespaceMatch[1]);
                 } else {
                     console.log(`[POPUP] No valid namespace found in URL`);
@@ -133,7 +133,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 tabId: tabs[0].id
             }, (response) => {
                 if (response?.csrfToken || response?.managedTenantCsrf) {
-                    console.log(`🔑 [POPUP] CSRF token available, auto-loading data...`);
+                    console.log(`[POPUP] CSRF token available, auto-loading data...`);
                     // Auto-load data since we have everything we need
                     fetchLoadBalancersDirect();
                 } else {
@@ -148,7 +148,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     function populateLoadBalancers(loadBalancerList) {
-        console.log(`📊 [POPUP] Populating ${loadBalancerList.length} load balancers`);
+        console.log(`[POPUP] Populating ${loadBalancerList.length} load balancers`);
 
         // Clear and store
         loadBalancers = {};

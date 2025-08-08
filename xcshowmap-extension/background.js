@@ -1585,7 +1585,7 @@ async function fetchSiteData(siteName, baseUrl, csrfToken, managedTenant) {
 }
 
 // Helper function to generate origin server nodes (updated for full API data structure)
-function generateOriginServerNodes(originPoolData, poolID, siteDataMap = null, routeColorIndex = -1, startEdge = 0) {
+function generateOriginServerNodes(originPoolData, poolID, siteDataMap = null, routeType = null, startEdge = 0) {
     const servers = originPoolData.get_spec?.origin_servers || [];
     let serverNodes = '';
     
@@ -1693,13 +1693,8 @@ function generateOriginServerNodes(originPoolData, poolID, siteDataMap = null, r
             serverLabel += `<br>Health Check: Enabled`;
         }
 
-        if (routeColorIndex >= 0) {
-            const serverEdgeId = `se${edgeNum}`;
-            serverNodes += `    ${poolID} ${serverEdgeId}@--> ${serverID}["${serverLabel}"];\n`;
-            serverNodes += `    class ${serverEdgeId} routeLine${routeColorIndex};\n`;
-        } else {
-            serverNodes += `    ${poolID} --> ${serverID}["${serverLabel}"];\n`;
-        }
+        // Always use simple connections from Pool to Nodes (Task 1: Simplify connections)
+        serverNodes += `    ${poolID} --> ${serverID}["${serverLabel}"];\n`;
         
         // Add CDN-specific styling if this is a CDN pool
         if (isCDNPool) {
@@ -1814,27 +1809,23 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
             // Define CSS classes for styling with advanced features
             diagram += `    classDef certValid stroke:#01ba44,stroke-width:2px;\n`;
             diagram += `    classDef certWarning stroke:#DAA520,stroke-width:2px;\n`;
-            diagram += `    classDef certError stroke:#B22222,stroke-width:2px;\n`;
-            diagram += `    classDef noWaf fill:#FF5733,stroke:#B22222,stroke-width:2px;\n`;
+            diagram += `    classDef certError stroke:#FFA500,stroke-width:2px;\n`;
+            diagram += `    classDef noWaf fill:#FFB347,stroke:#FFA500,stroke-width:2px;\n`;
             diagram += `    classDef animate stroke-dasharray: 9,5,stroke-dashoffset: 900,animation: dash 25s linear infinite;\n`;
 
-            // Define route color classes - distinct colors for up to 10 routes
-            const routeColors = [
-                '#4A90E2', // Blue
-                '#7B68EE', // Purple
-                '#FF6B6B', // Red
-                '#4ECDC4', // Teal
-                '#FFD93D', // Yellow
-                '#6BCF7F', // Green
-                '#FFA07A', // Light Salmon
-                '#DDA0DD', // Plum
-                '#20B2AA', // Light Sea Green
-                '#FF69B4'  // Hot Pink
-            ];
+            // Define route type colors (Task 3: Route type color coding)
+            const routeTypeColors = {
+                'default': '#808080',    // Grey
+                'simple': '#6BCF7F',     // Green  
+                'redirect': '#7B68EE',   // Purple
+                'direct_response': '#4A90E2', // Blue
+                'custom': '#FFA500'      // Orange
+            };
 
-            routeColors.forEach((color, index) => {
-                diagram += `    classDef route${index} fill:${color}20,stroke:${color},stroke-width:3px;\n`;
-                diagram += `    classDef routeLine${index} stroke:${color},stroke-width:2px,stroke-dasharray:9 5,stroke-dashoffset:900,animation:dash 25s linear infinite;\n`;
+            // Create route type classes
+            Object.entries(routeTypeColors).forEach(([routeType, color]) => {
+                diagram += `    classDef route_${routeType} fill:${color}20,stroke:${color},stroke-width:3px;\n`;
+                diagram += `    classDef routeLine_${routeType} stroke:${color},stroke-width:2px,stroke-dasharray:9 5,stroke-dashoffset:900,animation:dash 25s linear infinite;\n`;
             });
 
             // Process Domains with Certificate Info
@@ -2120,6 +2111,9 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
 
             diagram += `    Routes["**Routes**"];\n`;
 
+            // Track processed pools to avoid duplicate node generation (for both default and regular routes)
+            const processedPools = new Set();
+
             // Default Route
             if (lb.get_spec?.default_route_pools?.length > 0) {
                 diagram += `    DefaultRoute["**Default Route**"];\n`;
@@ -2153,12 +2147,15 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
 
                     diagram += `    DefaultRoute --> ${poolID}["${poolLabel}"];\n`;
 
-                    // Add origin servers if available
-                    if (originPoolData?.get_spec?.origin_servers?.length > 0) {
-                        console.log(`🔗 [DIAGRAM] Adding ${originPoolData.get_spec.origin_servers.length} servers for pool '${pool.pool.name}'`);
+                    // Add origin servers if available and not already processed (Fix: Single Pool→Node connections for default routes)
+                    if (originPoolData?.get_spec?.origin_servers?.length > 0 && !processedPools.has(pool.pool.name)) {
+                        console.log(`[DIAGRAM] Adding ${originPoolData.get_spec.origin_servers.length} servers for default route pool '${pool.pool.name}'`);
                         diagram += generateOriginServerNodes(originPoolData, poolID, siteDataMap);
+                        processedPools.add(pool.pool.name); // Mark as processed
+                    } else if (processedPools.has(pool.pool.name)) {
+                        console.log(`[DIAGRAM] Skipping already processed default route pool '${pool.pool.name}'`);
                     } else {
-                        console.log(` [DIAGRAM] No origin servers to add for pool '${pool.pool.name}'`);
+                        console.log(`[DIAGRAM] No origin servers to add for default route pool '${pool.pool.name}'`);
                     }
                 }
             }
@@ -2166,7 +2163,17 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
             // Process Routes
             if (lb.get_spec?.routes) {
                 lb.get_spec.routes.forEach((route, i) => {
-                    const routeColorIndex = i % routeColors.length;
+                    // Determine route type for coloring (Task 3: Route type color coding)
+                    let routeType = 'default';
+                    if (route.simple_route) {
+                        routeType = 'simple';
+                    } else if (route.redirect_route) {
+                        routeType = 'redirect';
+                    } else if (route.direct_response_route) {
+                        routeType = 'direct_response';
+                    } else {
+                        routeType = 'custom';
+                    }
                     if (route.simple_route) {
                         const matchConditions = ["**Route**"];
 
@@ -2187,10 +2194,10 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                         const nodeID = `route_${i}`;
                         const matchLabel = matchConditions.join(" <BR> ");
                         diagram += `    ${nodeID}["${matchLabel}"];\n`;
-                        diagram += `    class ${nodeID} route${routeColorIndex};\n`;
+                        diagram += `    class ${nodeID} route_${routeType};\n`;
                         const routeEdgeId = `re${edges}`;
                         diagram += `    Routes ${routeEdgeId}@--> ${nodeID};\n`;
-                        diagram += `    class ${routeEdgeId} routeLine${routeColorIndex};\n`;
+                        diagram += `    class ${routeEdgeId} routeLine_${routeType};\n`;
                         edges++;
 
                         // Route-specific WAF
@@ -2198,12 +2205,12 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                         if (routeWAF) {
                             const routeWafNodeID = `waf_${sanitize(routeWAF)}`;
                             if (!wafAdded.has(routeWafNodeID)) {
-                                diagram += `    ${routeWafNodeID}["**WAF**: ${routeWAF}"];\n`;
+                                diagram += `    ${routeWafNodeID}["**WAAP Override**<br>${routeWAF}"];\n`;
                                 wafAdded.set(routeWafNodeID, true);
                             }
                             const wafEdgeId = `we${edges}`;
                             diagram += `    ${nodeID} ${wafEdgeId}@--> ${routeWafNodeID};\n`;
-                            diagram += `    class ${wafEdgeId} routeLine${routeColorIndex};\n`;
+                            diagram += `    class ${wafEdgeId} routeLine_${routeType};\n`;
                             edges++;
                         }
 
@@ -2239,22 +2246,25 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                                 const routeWafNodeID = `waf_${sanitize(routeWAF)}`;
                                 const poolEdgeId = `pe${edges}`;
                                 diagram += `    ${routeWafNodeID} ${poolEdgeId}@--> ${poolID};\n`;
-                                diagram += `    class ${poolEdgeId} routeLine${routeColorIndex};\n`;
+                                diagram += `    class ${poolEdgeId} routeLine_${routeType};\n`;
                                 edges++;
                             } else {
                                 const poolEdgeId = `pe${edges}`;
                                 diagram += `    ${nodeID} ${poolEdgeId}@--> ${poolID};\n`;
-                                diagram += `    class ${poolEdgeId} routeLine${routeColorIndex};\n`;
+                                diagram += `    class ${poolEdgeId} routeLine_${routeType};\n`;
                                 edges++;
                             }
 
-                            // Add origin servers if available
-                            if (originPoolData?.get_spec?.origin_servers?.length > 0) {
-                                console.log(`🔗 [DIAGRAM] Adding ${originPoolData.get_spec.origin_servers.length} servers for route pool '${pool.pool.name}'`);
-                                diagram += generateOriginServerNodes(originPoolData, poolIDName, siteDataMap, routeColorIndex, edges);
+                            // Add origin servers if available and not already processed (Fix: Single Pool→Node connections)
+                            if (originPoolData?.get_spec?.origin_servers?.length > 0 && !processedPools.has(pool.pool.name)) {
+                                console.log(`[DIAGRAM] Adding ${originPoolData.get_spec.origin_servers.length} servers for route pool '${pool.pool.name}'`);
+                                diagram += generateOriginServerNodes(originPoolData, poolIDName, siteDataMap, routeType, edges);
                                 edges += originPoolData.get_spec.origin_servers.length;
+                                processedPools.add(pool.pool.name); // Mark as processed
+                            } else if (processedPools.has(pool.pool.name)) {
+                                console.log(`[DIAGRAM] Skipping already processed pool '${pool.pool.name}'`);
                             } else {
-                                console.log(` [DIAGRAM] No origin servers to add for route pool '${pool.pool.name}'`);
+                                console.log(`[DIAGRAM] No origin servers to add for route pool '${pool.pool.name}'`);
                             }
                         });
 
@@ -2262,14 +2272,14 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                         const nodeID = `redirect_${i}`;
                         const redirectTarget = `${route.redirect_route.route_redirect.host_redirect}${route.redirect_route.route_redirect.path_redirect}`;
                         diagram += `    ${nodeID}["**Redirect Route**<br>Path: ${route.redirect_route.path.prefix}"];\n`;
-                        diagram += `    class ${nodeID} route${routeColorIndex};\n`;
+                        diagram += `    class ${nodeID} route_${routeType};\n`;
                         const redirectEdgeId = `rde${edges}`;
                         diagram += `    Routes ${redirectEdgeId}@--> ${nodeID};\n`;
-                        diagram += `    class ${redirectEdgeId} routeLine${routeColorIndex};\n`;
+                        diagram += `    class ${redirectEdgeId} routeLine_${routeType};\n`;
                         edges++;
                         const targetEdgeId = `te${edges}`;
                         diagram += `    ${nodeID} ${targetEdgeId}@-->|Redirects to| redirect_target_${i}["${redirectTarget}"];\n`;
-                        diagram += `    class ${targetEdgeId} routeLine${routeColorIndex};\n`;
+                        diagram += `    class ${targetEdgeId} routeLine_${routeType};\n`;
                         edges++;
                     }
                 });
