@@ -1493,11 +1493,12 @@ async function fetchSiteData(siteName, baseUrl, csrfToken, managedTenant) {
 }
 
 // Helper function to generate origin server nodes (updated for full API data structure)
-function generateOriginServerNodes(originPoolData, poolID, siteDataMap = null) {
+function generateOriginServerNodes(originPoolData, poolID, siteDataMap = null, routeColorIndex = -1, startEdge = 0) {
     const servers = originPoolData.get_spec?.origin_servers || [];
     let serverNodes = '';
 
     servers.forEach((server, serverIndex) => {
+        const edgeNum = startEdge + serverIndex;
         const serverID = `${poolID}_server_${serverIndex}`;
         let serverLabel = `**Node ${serverIndex + 1}**`;
 
@@ -1594,7 +1595,13 @@ function generateOriginServerNodes(originPoolData, poolID, siteDataMap = null) {
             serverLabel += `<br>Health Check: Enabled`;
         }
 
-        serverNodes += `    ${poolID} --> ${serverID}["${serverLabel}"];\n`;
+        if (routeColorIndex >= 0) {
+            const serverEdgeId = `se${edgeNum}`;
+            serverNodes += `    ${poolID} ${serverEdgeId}@--> ${serverID}["${serverLabel}"];\n`;
+            serverNodes += `    class ${serverEdgeId} routeLine${routeColorIndex};\n`;
+        } else {
+            serverNodes += `    ${poolID} --> ${serverID}["${serverLabel}"];\n`;
+        }
     });
 
     return serverNodes;
@@ -1687,6 +1694,25 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
             diagram += `    classDef certError stroke:#B22222,stroke-width:2px;\n`;
             diagram += `    classDef noWaf fill:#FF5733,stroke:#B22222,stroke-width:2px;\n`;
             diagram += `    classDef animate stroke-dasharray: 9,5,stroke-dashoffset: 900,animation: dash 25s linear infinite;\n`;
+            
+            // Define route color classes - distinct colors for up to 10 routes
+            const routeColors = [
+                '#4A90E2', // Blue
+                '#7B68EE', // Purple
+                '#FF6B6B', // Red
+                '#4ECDC4', // Teal
+                '#FFD93D', // Yellow
+                '#6BCF7F', // Green
+                '#FFA07A', // Light Salmon
+                '#DDA0DD', // Plum
+                '#20B2AA', // Light Sea Green
+                '#FF69B4'  // Hot Pink
+            ];
+            
+            routeColors.forEach((color, index) => {
+                diagram += `    classDef route${index} fill:${color}20,stroke:${color},stroke-width:3px;\n`;
+                diagram += `    classDef routeLine${index} stroke:${color},stroke-width:2px,stroke-dasharray:9 5,stroke-dashoffset:900,animation:dash 25s linear infinite;\n`;
+            });
 
             // Process Domains with Certificate Info
             if (lb.get_spec?.domains) {
@@ -2017,6 +2043,7 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
             // Process Routes
             if (lb.get_spec?.routes) {
                 lb.get_spec.routes.forEach((route, i) => {
+                    const routeColorIndex = i % routeColors.length;
                     if (route.simple_route) {
                         const matchConditions = ["**Route**"];
 
@@ -2037,7 +2064,10 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                         const nodeID = `route_${i}`;
                         const matchLabel = matchConditions.join(" <BR> ");
                         diagram += `    ${nodeID}["${matchLabel}"];\n`;
-                        diagram += `    Routes e${edges}@--> ${nodeID};\n`;
+                        diagram += `    class ${nodeID} route${routeColorIndex};\n`;
+                        const routeEdgeId = `re${edges}`;
+                        diagram += `    Routes ${routeEdgeId}@--> ${nodeID};\n`;
+                        diagram += `    class ${routeEdgeId} routeLine${routeColorIndex};\n`;
                         edges++;
 
                         // Route-specific WAF
@@ -2048,7 +2078,9 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                                 diagram += `    ${routeWafNodeID}["**WAF**: ${routeWAF}"];\n`;
                                 wafAdded.set(routeWafNodeID, true);
                             }
-                            diagram += `    ${nodeID} e${edges}@--> ${routeWafNodeID};\n`;
+                            const wafEdgeId = `we${edges}`;
+                            diagram += `    ${nodeID} ${wafEdgeId}@--> ${routeWafNodeID};\n`;
+                            diagram += `    class ${wafEdgeId} routeLine${routeColorIndex};\n`;
                             edges++;
                         }
 
@@ -2082,17 +2114,22 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
 
                             if (routeWAF) {
                                 const routeWafNodeID = `waf_${sanitize(routeWAF)}`;
-                                diagram += `    ${routeWafNodeID} e${edges}@--> ${poolID};\n`;
+                                const poolEdgeId = `pe${edges}`;
+                                diagram += `    ${routeWafNodeID} ${poolEdgeId}@--> ${poolID};\n`;
+                                diagram += `    class ${poolEdgeId} routeLine${routeColorIndex};\n`;
                                 edges++;
                             } else {
-                                diagram += `    ${nodeID} e${edges}@--> ${poolID};\n`;
+                                const poolEdgeId = `pe${edges}`;
+                                diagram += `    ${nodeID} ${poolEdgeId}@--> ${poolID};\n`;
+                                diagram += `    class ${poolEdgeId} routeLine${routeColorIndex};\n`;
                                 edges++;
                             }
 
                             // Add origin servers if available
                             if (originPoolData?.get_spec?.origin_servers?.length > 0) {
                                 console.log(`🔗 [DIAGRAM] Adding ${originPoolData.get_spec.origin_servers.length} servers for route pool '${pool.pool.name}'`);
-                                diagram += generateOriginServerNodes(originPoolData, poolIDName, siteDataMap);
+                                diagram += generateOriginServerNodes(originPoolData, poolIDName, siteDataMap, routeColorIndex, edges);
+                                edges += originPoolData.get_spec.origin_servers.length;
                             } else {
                                 console.log(` [DIAGRAM] No origin servers to add for route pool '${pool.pool.name}'`);
                             }
@@ -2102,15 +2139,20 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                         const nodeID = `redirect_${i}`;
                         const redirectTarget = `${route.redirect_route.route_redirect.host_redirect}${route.redirect_route.route_redirect.path_redirect}`;
                         diagram += `    ${nodeID}["**Redirect Route**<br>Path: ${route.redirect_route.path.prefix}"];\n`;
-                        diagram += `    Routes e${edges}@--> ${nodeID};\n`;
+                        diagram += `    class ${nodeID} route${routeColorIndex};\n`;
+                        const redirectEdgeId = `rde${edges}`;
+                        diagram += `    Routes ${redirectEdgeId}@--> ${nodeID};\n`;
+                        diagram += `    class ${redirectEdgeId} routeLine${routeColorIndex};\n`;
                         edges++;
-                        diagram += `    ${nodeID} e${edges}@-->|Redirects to| redirect_target_${i}["${redirectTarget}"];\n`;
+                        const targetEdgeId = `te${edges}`;
+                        diagram += `    ${nodeID} ${targetEdgeId}@-->|Redirects to| redirect_target_${i}["${redirectTarget}"];\n`;
+                        diagram += `    class ${targetEdgeId} routeLine${routeColorIndex};\n`;
                         edges++;
                     }
                 });
             }
 
-            // Apply animation to all edges (restored for Mermaid v11.7+)
+            // Apply animation to all regular edges (restored for Mermaid v11.7+)
             for (let edge = 0; edge < edges; edge++) {
                 diagram += `    class e${edge} animate;\n`;
             }
