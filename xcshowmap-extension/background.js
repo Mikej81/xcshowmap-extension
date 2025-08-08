@@ -1588,11 +1588,17 @@ async function fetchSiteData(siteName, baseUrl, csrfToken, managedTenant) {
 function generateOriginServerNodes(originPoolData, poolID, siteDataMap = null, routeColorIndex = -1, startEdge = 0) {
     const servers = originPoolData.get_spec?.origin_servers || [];
     let serverNodes = '';
+    
+    // Check if this is a CDN pool based on pool name
+    const isCDNPool = originPoolData.name && (
+        originPoolData.name.toLowerCase().includes('cdn') || 
+        originPoolData.name.toLowerCase().includes('cache')
+    );
 
     servers.forEach((server, serverIndex) => {
         const edgeNum = startEdge + serverIndex;
         const serverID = `${poolID}_server_${serverIndex}`;
-        let serverLabel = `**Node ${serverIndex + 1}**`;
+        let serverLabel = isCDNPool ? `**CDN Node ${serverIndex + 1}**` : `**Node ${serverIndex + 1}**`;
 
         // Determine server type and details from full API structure
         if (server.public_name?.dns_name) {
@@ -1694,6 +1700,11 @@ function generateOriginServerNodes(originPoolData, poolID, siteDataMap = null, r
         } else {
             serverNodes += `    ${poolID} --> ${serverID}["${serverLabel}"];\n`;
         }
+        
+        // Add CDN-specific styling if this is a CDN pool
+        if (isCDNPool) {
+            serverNodes += `    style ${serverID} fill:#E6F3FF,stroke:#4169E1,stroke-width:2px;\n`;
+        }
     });
 
     return serverNodes;
@@ -1772,13 +1783,33 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
 
             // Start Mermaid diagram (advanced syntax for v11.7+)
             diagram += `---\n`;
-            diagram += `title: ${lb.name} Load Balancer Service Flow\n`;
+            diagram += `title: Load Balancer Service Flow - ${lb.name}\n`;
             diagram += `---\n`;
             diagram += `graph LR;\n`;
 
-            // User and Load Balancer
-            diagram += `    User --> LoadBalancer;\n`;
-            diagram += `    LoadBalancer["**${lb.name} ${loadBalancerLabel}**"];\n`;
+            // Check if CDN is in front of load balancer first
+            let hasCDNInFront = false;
+            if (cdnLoadBalancers && cdnLoadBalancers.length > 0) {
+                const lbDomains = lb.get_spec?.domains || [];
+                
+                for (const cdn of cdnLoadBalancers) {
+                    if (!cdn || !cdn.get_spec) continue;
+                    
+                    const cdnOriginDomain = cdn.get_spec?.origin_pool?.public_name?.dns_name || 
+                                           cdn.get_spec?.origin_pool?.origin_servers?.[0]?.public_name?.dns_name;
+                    
+                    if (cdnOriginDomain && lbDomains.includes(cdnOriginDomain)) {
+                        hasCDNInFront = true;
+                        break;
+                    }
+                }
+            }
+            
+            // User and Load Balancer (skip User -> LoadBalancer if CDN is in front)
+            if (!hasCDNInFront) {
+                diagram += `    User --> LoadBalancer;\n`;
+            }
+            diagram += `    LoadBalancer["**${loadBalancerLabel}**<br>${lb.name}"];\n`;
 
             // Define CSS classes for styling with advanced features
             diagram += `    classDef certValid stroke:#01ba44,stroke-width:2px;\n`;
@@ -1827,7 +1858,7 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                     }
 
                     const domainNodeID = sanitize(domain);
-                    const domainNode = `domain_${domainNodeID}["${domain}<br> Cert: ${certStateDisplay} <br> Exp: ${certExpiration}"]`;
+                    const domainNode = `domain_${domainNodeID}["**Certificate**<br>${domain}<br>Status: ${certStateDisplay}<br>Exp: ${certExpiration}"]`;
 
                     diagram += `    LoadBalancer e${edges}@-- SNI --> ${domainNode};\n`;
                     edges++;
@@ -2046,7 +2077,7 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
             if (hasWAF) {
                 const wafNodeID = sanitize(wafName);
                 wafNode = `waf_${wafNodeID}`;
-                diagram += `    ${wafNode}["**WAF**: ${wafName}"];\n`;
+                diagram += `    ${wafNode}["**WAAP**<br>${wafName}"];\n`;
 
                 if (botDefenseNode) {
                     diagram += `    ${botDefenseNode} e${edges}@--> ${wafNode};\n`;
@@ -2267,73 +2298,25 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                         const cdnDomains = cdn.get_spec?.domains || [];
                         // Escape domain names to prevent Mermaid syntax errors and URL encoding issues
                         const escapedDomains = cdnDomains.map(d => d ? d.replace(/[<>\"'&%]/g, '') : '').join(', ');
-                        const escapedOriginDomain = cdnOriginDomain ? cdnOriginDomain.replace(/[<>\"'&%]/g, '') : 'Unknown';
                         const escapedCDNName = cdn.name ? cdn.name.replace(/[<>\"'&%]/g, '') : 'Unknown CDN';
                         
                         diagram += `\n    %% CDN in front of Load Balancer\n`;
-                        diagram += `    User2[User] --> ${cdnNodeId};\n`;
+                        diagram += `    User --> ${cdnNodeId};\n`;
                         diagram += `    ${cdnNodeId}["**CDN: ${escapedCDNName}**<br>Domains: ${escapedDomains}<br>Cache TTL: ${cdn.get_spec?.default_cache_action?.cache_ttl_default || 'default'}"];\n`;
                         
-                        // Show cache rules if present
+                        // Show cache rules if present, then connect directly to LoadBalancer
                         if (cdn.get_spec?.cache_rules?.length > 0) {
                             const cacheRuleId = `cache_rules_${cdnIndex}`;
                             diagram += `    ${cdnNodeId} --> ${cacheRuleId}["**Cache Rules**<br>${cdn.get_spec.cache_rules.length} rules configured"];\n`;
-                            diagram += `    ${cacheRuleId} --> cdn_origin_${cdnIndex}["**Origin**<br>${escapedOriginDomain}<br>(Points to Load Balancer)"];\n`;
+                            diagram += `    ${cacheRuleId} --> LoadBalancer;\n`;
                         } else {
-                            diagram += `    ${cdnNodeId} --> cdn_origin_${cdnIndex}["**Origin**<br>${escapedOriginDomain}<br>(Points to Load Balancer)"];\n`;
+                            diagram += `    ${cdnNodeId} --> LoadBalancer;\n`;
                         }
                         
                         diagram += `    style ${cdnNodeId} fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px;\n`;
                     }
                 });
                 
-                // Check for CDN off load balancer routes
-                if (lb.get_spec?.routes) {
-                    lb.get_spec.routes.forEach((route, routeIndex) => {
-                        if (route.simple_route?.origin_pools) {
-                            route.simple_route.origin_pools.forEach(pool => {
-                                // Check if pool name suggests CDN usage
-                                if (pool.pool.name.toLowerCase().includes('cdn') || 
-                                    pool.pool.name.toLowerCase().includes('cache')) {
-                                    
-                                    const cdnRouteId = `cdn_route_${routeIndex}_${sanitize(pool.pool.name)}`;
-                                    
-                                    // Create a disconnected CDN route flow (without User/LoadBalancer since main flow covers that)
-                                    diagram += `\n    %% CDN off Load Balancer Route\n`;
-                                    
-                                    let pathMatch = '';
-                                    if (route.simple_route.path?.regex) {
-                                        // Escape regex special characters for Mermaid and URL encoding
-                                        const escapedRegex = route.simple_route.path.regex.replace(/[<>\"'&%]/g, '');
-                                        pathMatch = `<br>Path: ${escapedRegex}`;
-                                    } else if (route.simple_route.path?.prefix) {
-                                        const escapedPrefix = route.simple_route.path.prefix.replace(/[<>\"'&%]/g, '');
-                                        pathMatch = `<br>Path: ${escapedPrefix}`;
-                                    }
-                                    
-                                    const escapedPoolName = pool.pool.name ? pool.pool.name.replace(/[<>\"'&%]/g, '') : 'Unknown Pool';
-                                    diagram += `    ${cdnRouteId}["**CDN Route**${pathMatch}<br>Pool: ${escapedPoolName}"];\n`;
-                                    diagram += `    style ${cdnRouteId} fill:#E6F3FF,stroke:#4169E1,stroke-width:2px;\n`;
-                                    
-                                    // Find the actual origin pool data for this CDN pool
-                                    const cdnPoolData = originPoolsData.find(p => p.name === pool.pool.name);
-                                    if (cdnPoolData?.get_spec?.origin_servers) {
-                                        const cdnOriginId = `cdn_route_origin_${routeIndex}`;
-                                        const originServer = cdnPoolData.get_spec.origin_servers[0];
-                                        let originName = originServer.public_name?.dns_name || 
-                                                       originServer.public_ip?.ip || 
-                                                       originServer.private_name?.dns_name || 
-                                                       'Unknown Origin';
-                                        
-                                        // Escape origin name for Mermaid and URL encoding
-                                        const escapedOriginName = originName.replace(/[<>\"'&%]/g, '');
-                                        diagram += `    ${cdnRouteId} --> ${cdnOriginId}["**CDN Origin**<br>${escapedOriginName}"];\n`;
-                                    }
-                                }
-                            });
-                        }
-                    });
-                }
                 } catch (cdnError) {
                     console.error('[DIAGRAM] Error rendering CDN flows:', cdnError);
                     // Continue with diagram generation even if CDN rendering fails
