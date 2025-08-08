@@ -78,7 +78,7 @@ jobs:
           5. Click \"Load unpacked\" and select the extracted folder
           
           ### Chrome Web Store
-          This extension may also be available on the Chrome Web Store." \
+          This extension may also be available on the Chrome Web Store (eventually)." \
             xcshowmap-$VERSION.zip
         env:
           GH_TOKEN: ${{ github.token }}

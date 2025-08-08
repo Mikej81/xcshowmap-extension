@@ -151,7 +151,7 @@ class ExtensionLogger {
         }
 
         // Log to console for immediate debugging (but don't store large data)
-        console.log(`🌐 [API] ${method} ${url}`, {
+        console.log(`[API] ${method} ${url}`, {
             tabId: tabId,
             statusCode: responseData?.statusCode,
             dataSize: apiLogEntry.dataSize,
@@ -523,7 +523,7 @@ chrome.webRequest.onBeforeRequest.addListener(
         if (details.url.includes("console.ves.volterra.io") &&
             (details.url.includes("/api/") || details.url.includes("/api"))) {
 
-            console.log(`🌐 [API-INTERCEPT] ${details.method} ${details.url}`, {
+            console.log(`[API-INTERCEPT] ${details.method} ${details.url}`, {
                 tabId: details.tabId,
                 type: details.type,
                 timeStamp: details.timeStamp
@@ -834,6 +834,69 @@ async function extractCsrfFromCurrentPage(tabId) {
     return null;
 }
 
+// Function to fetch CDN load balancers for a namespace
+async function fetchCDNLoadBalancers(tabId, namespace) {
+    console.log(`[BACKGROUND] Fetching CDN load balancers for namespace: ${namespace}`);
+    
+    const tabInfo = tabData[tabId];
+    if (!tabInfo) {
+        console.log('[BACKGROUND] No tab data found for CDN fetch');
+        return [];
+    }
+
+    // Get the current tab URL to determine the base URL
+    const tab = await chrome.tabs.get(tabId);
+    const url = new URL(tab.url);
+    const baseUrl = url.origin;
+
+    // Determine if we're in managed tenant context
+    const managedTenantMatch = tab.url.match(/\/managed_tenant\/([^\/]+)/);
+    const managedTenant = managedTenantMatch ? managedTenantMatch[1] : null;
+
+    // Use appropriate CSRF token
+    let csrfToken = null;
+    if (managedTenant && tabInfo.managed_tenant_csrf) {
+        csrfToken = tabInfo.managed_tenant_csrf;
+    } else if (tabInfo.csrf_token) {
+        csrfToken = tabInfo.csrf_token;
+    } else {
+        console.log('[BACKGROUND] No CSRF token available for CDN fetch');
+        return [];
+    }
+
+    // Construct API URL for CDN load balancers
+    let apiUrl;
+    if (managedTenant) {
+        apiUrl = `${baseUrl}/managed_tenant/${managedTenant}/api/config/namespaces/${namespace}/cdn_loadbalancers?report_fields&csrf=${csrfToken}`;
+    } else {
+        apiUrl = `${baseUrl}/api/config/namespaces/${namespace}/cdn_loadbalancers?report_fields&csrf=${csrfToken}`;
+    }
+
+    console.log(`[BACKGROUND] Fetching CDN load balancers from: ${apiUrl}`);
+
+    try {
+        const response = await fetch(apiUrl, {
+            credentials: 'include',
+            headers: {
+                'Accept': 'application/json',
+                'X-CSRF-Token': csrfToken
+            }
+        });
+
+        if (!response.ok) {
+            console.log(`[BACKGROUND] CDN API returned ${response.status}: ${response.statusText}`);
+            return [];
+        }
+
+        const data = await response.json();
+        console.log(`[BACKGROUND] Received ${data.items?.length || 0} CDN load balancers`);
+        return data.items || [];
+    } catch (error) {
+        console.error('[BACKGROUND] Error fetching CDN load balancers:', error);
+        return [];
+    }
+}
+
 // Function to fetch origin pools for a specific load balancer
 async function fetchOriginPoolsForLoadBalancer(tabId, namespace, loadBalancer) {
     console.log(` [BACKGROUND] Fetching origin pools for load balancer: ${loadBalancer.name}`);
@@ -903,7 +966,7 @@ async function fetchOriginPoolsForLoadBalancer(tabId, namespace, loadBalancer) {
         apiUrl = `${baseUrl}/api/config/namespaces/${namespace}/origin_pools?report_fields&csrf=${csrfToken}`;
     }
 
-    console.log(`🌐 [BACKGROUND] Fetching origin pools from: ${apiUrl}`);
+    console.log(`[BACKGROUND] Fetching origin pools from: ${apiUrl}`);
 
     try {
         const response = await fetch(apiUrl, {
@@ -949,7 +1012,7 @@ async function fetchOriginPoolsForLoadBalancer(tabId, namespace, loadBalancer) {
 
 // Direct API fetching function
 async function fetchLoadBalancersDirectly(tabId, namespace) {
-    console.log(`🌐 [BACKGROUND] Direct API fetch for namespace: ${namespace}`);
+    console.log(`[BACKGROUND] Direct API fetch for namespace: ${namespace}`);
 
     const tabInfo = tabData[tabId];
     if (!tabInfo) {
@@ -1352,16 +1415,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
                 console.log(` [BACKGROUND] Extracted namespace: ${namespace} from URL: ${tab.url}`);
 
-                // First fetch origin pools, then generate diagram
-                fetchOriginPoolsForLoadBalancer(tabId, namespace, lbObject)
-                    .then(result => {
-                        console.log("🎆 Fetched origin pools, generating enhanced diagram");
+                // First fetch origin pools and CDN load balancers, then generate diagram
+                Promise.all([
+                    fetchOriginPoolsForLoadBalancer(tabId, namespace, lbObject),
+                    fetchCDNLoadBalancers(tabId, namespace)
+                ])
+                    .then(([poolResult, cdnLoadBalancers]) => {
+                        console.log("Fetched origin pools and CDN data, generating enhanced diagram");
                         return generateMermaidDiagramEnhanced(
                             lbObject,
-                            result.pools,
-                            result.baseUrl,
-                            result.csrfToken,
-                            result.managedTenant
+                            poolResult.pools,
+                            poolResult.baseUrl,
+                            poolResult.csrfToken,
+                            poolResult.managedTenant,
+                            cdnLoadBalancers
                         );
                     })
                     .then(mermaidDiagram => {
@@ -1371,13 +1438,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
                         console.log("**Generated Enhanced Mermaid Diagram with Origin Pools:**\n", mermaidDiagram);
 
-                        //  Encode the diagram and open a new tab
-                        const encodedDiagram = encodeURIComponent(mermaidDiagram);
-                        const diagramUrl = `chrome-extension://${chrome.runtime.id}/mermaid.html?diagram=${encodedDiagram}`;
-
-                        chrome.tabs.create({ url: diagramUrl });
-
-                        sendResponse({ mermaidDiagram });
+                        // Store the diagram in chrome storage and open tab with ID
+                        try {
+                            console.log('[BACKGROUND] Storing diagram in chrome.storage, length:', mermaidDiagram.length);
+                            
+                            // Generate a unique ID for this diagram
+                            const diagramId = 'diagram_' + Date.now() + '_' + Math.random().toString(36).substring(2, 11);
+                            
+                            // Store the raw diagram in chrome storage (no encoding needed)
+                            const storageData = {};
+                            storageData[diagramId] = {
+                                diagram: mermaidDiagram,
+                                timestamp: Date.now()
+                            };
+                            
+                            chrome.storage.local.set(storageData, () => {
+                                if (chrome.runtime.lastError) {
+                                    console.error('[BACKGROUND] Failed to store diagram:', chrome.runtime.lastError);
+                                    sendResponse({ error: 'Failed to store diagram' });
+                                    return;
+                                }
+                                
+                                console.log('[BACKGROUND] Diagram stored successfully with ID:', diagramId);
+                                
+                                // Open mermaid.html with the storage ID
+                                const diagramUrl = `chrome-extension://${chrome.runtime.id}/mermaid.html?storageId=${diagramId}`;
+                                chrome.tabs.create({ url: diagramUrl });
+                                
+                            });
+                        } catch (storageError) {
+                            console.error('[BACKGROUND] Error with storage approach:', storageError);
+                            sendResponse({ error: 'Failed to handle diagram storage' });
+                        }
                     })
                     .catch(error => {
                         console.error("Error in generating Enhanced Mermaid Diagram:", error);
@@ -1443,7 +1535,7 @@ async function generateMermaidDiagramWithOriginPools(lb, tabId) {
 
             // Call the original diagram generation with origin pools data
             // Note: We don't have baseUrl, csrfToken, managedTenant here, so RE connections won't be added
-            const diagram = await generateMermaidDiagramEnhanced(lb, originPoolsData, null, null, null);
+            const diagram = await generateMermaidDiagramEnhanced(lb, originPoolsData, null, null, null, []);
             resolve(diagram);
 
         } catch (error) {
@@ -1467,7 +1559,7 @@ async function fetchSiteData(siteName, baseUrl, csrfToken, managedTenant) {
         apiUrl = `${baseUrl}/api/config/namespaces/system/sites/${siteName}?csrf=${csrfToken}`;
     }
 
-    console.log(`🌐 [BACKGROUND] Fetching site data for: ${siteName}`);
+    console.log(`[BACKGROUND] Fetching site data for: ${siteName}`);
 
     try {
         const response = await fetch(apiUrl, {
@@ -1493,14 +1585,20 @@ async function fetchSiteData(siteName, baseUrl, csrfToken, managedTenant) {
 }
 
 // Helper function to generate origin server nodes (updated for full API data structure)
-function generateOriginServerNodes(originPoolData, poolID, siteDataMap = null, routeColorIndex = -1, startEdge = 0) {
+function generateOriginServerNodes(originPoolData, poolID, siteDataMap = null, routeType = null, startEdge = 0) {
     const servers = originPoolData.get_spec?.origin_servers || [];
     let serverNodes = '';
+    
+    // Check if this is a CDN pool based on pool name
+    const isCDNPool = originPoolData.name && (
+        originPoolData.name.toLowerCase().includes('cdn') || 
+        originPoolData.name.toLowerCase().includes('cache')
+    );
 
     servers.forEach((server, serverIndex) => {
         const edgeNum = startEdge + serverIndex;
         const serverID = `${poolID}_server_${serverIndex}`;
-        let serverLabel = `**Node ${serverIndex + 1}**`;
+        let serverLabel = isCDNPool ? `**CDN Node ${serverIndex + 1}**` : `**Node ${serverIndex + 1}**`;
 
         // Determine server type and details from full API structure
         if (server.public_name?.dns_name) {
@@ -1595,12 +1693,12 @@ function generateOriginServerNodes(originPoolData, poolID, siteDataMap = null, r
             serverLabel += `<br>Health Check: Enabled`;
         }
 
-        if (routeColorIndex >= 0) {
-            const serverEdgeId = `se${edgeNum}`;
-            serverNodes += `    ${poolID} ${serverEdgeId}@--> ${serverID}["${serverLabel}"];\n`;
-            serverNodes += `    class ${serverEdgeId} routeLine${routeColorIndex};\n`;
-        } else {
-            serverNodes += `    ${poolID} --> ${serverID}["${serverLabel}"];\n`;
+        // Always use simple connections from Pool to Nodes (Task 1: Simplify connections)
+        serverNodes += `    ${poolID} --> ${serverID}["${serverLabel}"];\n`;
+        
+        // Add CDN-specific styling if this is a CDN pool
+        if (isCDNPool) {
+            serverNodes += `    style ${serverID} fill:#E6F3FF,stroke:#4169E1,stroke-width:2px;\n`;
         }
     });
 
@@ -1608,7 +1706,7 @@ function generateOriginServerNodes(originPoolData, poolID, siteDataMap = null, r
 }
 
 // Enhanced diagram generation based on CLI tool
-async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl = null, csrfToken = null, managedTenant = null) {
+async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl = null, csrfToken = null, managedTenant = null, cdnLoadBalancers = []) {
     return new Promise(async (resolve, reject) => {
         try {
             const sanitize = (str) => str.replace(/[^a-zA-Z0-9]/g, '_');
@@ -1651,14 +1749,14 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                 });
 
                 // Fetch all site data upfront
-                console.log(`🌐 [DIAGRAM] Found ${allSiteNames.size} unique sites to fetch data for`);
+                console.log(`[DIAGRAM] Found ${allSiteNames.size} unique sites to fetch data for`);
                 for (const siteName of allSiteNames) {
                     const siteData = await fetchSiteData(siteName, baseUrl, csrfToken, managedTenant);
                     if (siteData) {
                         siteDataMap.set(siteName, siteData);
                     }
                 }
-                console.log(`✅ [DIAGRAM] Fetched data for ${siteDataMap.size} sites`);
+                console.log(`[DIAGRAM] Fetched data for ${siteDataMap.size} sites`);
             }
 
             // Determine Load Balancer Type
@@ -1680,38 +1778,54 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
 
             // Start Mermaid diagram (advanced syntax for v11.7+)
             diagram += `---\n`;
-            diagram += `title: ${lb.name} Load Balancer Service Flow\n`;
+            diagram += `title: Load Balancer Service Flow - ${lb.name}\n`;
             diagram += `---\n`;
             diagram += `graph LR;\n`;
 
-            // User and Load Balancer
-            diagram += `    User --> LoadBalancer;\n`;
-            diagram += `    LoadBalancer["**${lb.name} ${loadBalancerLabel}**"];\n`;
+            // Check if CDN is in front of load balancer first
+            let hasCDNInFront = false;
+            if (cdnLoadBalancers && cdnLoadBalancers.length > 0) {
+                const lbDomains = lb.get_spec?.domains || [];
+                
+                for (const cdn of cdnLoadBalancers) {
+                    if (!cdn || !cdn.get_spec) continue;
+                    
+                    const cdnOriginDomain = cdn.get_spec?.origin_pool?.public_name?.dns_name || 
+                                           cdn.get_spec?.origin_pool?.origin_servers?.[0]?.public_name?.dns_name;
+                    
+                    if (cdnOriginDomain && lbDomains.includes(cdnOriginDomain)) {
+                        hasCDNInFront = true;
+                        break;
+                    }
+                }
+            }
+            
+            // User and Load Balancer (skip User -> LoadBalancer if CDN is in front)
+            if (!hasCDNInFront) {
+                diagram += `    User --> LoadBalancer;\n`;
+            }
+            diagram += `    LoadBalancer["**${loadBalancerLabel}**<br>${lb.name}"];\n`;
 
             // Define CSS classes for styling with advanced features
             diagram += `    classDef certValid stroke:#01ba44,stroke-width:2px;\n`;
             diagram += `    classDef certWarning stroke:#DAA520,stroke-width:2px;\n`;
-            diagram += `    classDef certError stroke:#B22222,stroke-width:2px;\n`;
-            diagram += `    classDef noWaf fill:#FF5733,stroke:#B22222,stroke-width:2px;\n`;
+            diagram += `    classDef certError stroke:#FFA500,stroke-width:2px;\n`;
+            diagram += `    classDef noWaf fill:#FFB347,stroke:#FFA500,stroke-width:2px;\n`;
             diagram += `    classDef animate stroke-dasharray: 9,5,stroke-dashoffset: 900,animation: dash 25s linear infinite;\n`;
 
-            // Define route color classes - distinct colors for up to 10 routes
-            const routeColors = [
-                '#4A90E2', // Blue
-                '#7B68EE', // Purple
-                '#FF6B6B', // Red
-                '#4ECDC4', // Teal
-                '#FFD93D', // Yellow
-                '#6BCF7F', // Green
-                '#FFA07A', // Light Salmon
-                '#DDA0DD', // Plum
-                '#20B2AA', // Light Sea Green
-                '#FF69B4'  // Hot Pink
-            ];
+            // Define route type colors (Task 3: Route type color coding)
+            const routeTypeColors = {
+                'default': '#808080',    // Grey
+                'simple': '#6BCF7F',     // Green  
+                'redirect': '#7B68EE',   // Purple
+                'direct_response': '#4A90E2', // Blue
+                'custom': '#FFA500'      // Orange
+            };
 
-            routeColors.forEach((color, index) => {
-                diagram += `    classDef route${index} fill:${color}20,stroke:${color},stroke-width:3px;\n`;
-                diagram += `    classDef routeLine${index} stroke:${color},stroke-width:2px,stroke-dasharray:9 5,stroke-dashoffset:900,animation:dash 25s linear infinite;\n`;
+            // Create route type classes
+            Object.entries(routeTypeColors).forEach(([routeType, color]) => {
+                diagram += `    classDef route_${routeType} fill:${color}20,stroke:${color},stroke-width:3px;\n`;
+                diagram += `    classDef routeLine_${routeType} stroke:${color},stroke-width:2px,stroke-dasharray:9 5,stroke-dashoffset:900,animation:dash 25s linear infinite;\n`;
             });
 
             // Process Domains with Certificate Info
@@ -1735,7 +1849,7 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                     }
 
                     const domainNodeID = sanitize(domain);
-                    const domainNode = `domain_${domainNodeID}["${domain}<br> Cert: ${certStateDisplay} <br> Exp: ${certExpiration}"]`;
+                    const domainNode = `domain_${domainNodeID}["**Certificate**<br>${domain}<br>Status: ${certStateDisplay}<br>Exp: ${certExpiration}"]`;
 
                     diagram += `    LoadBalancer e${edges}@-- SNI --> ${domainNode};\n`;
                     edges++;
@@ -1840,7 +1954,7 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
 
             // Create the security controls subgraph if there are controls to show
             if (hasSecurityControls) {
-                diagram += `    subgraph CommonSecurityControls ["**Common Security Controls**"]\n`;
+                diagram += `    subgraph CommonSecurityControls ["**Common&nbsp;Security&nbsp;Controls**"]\n`;
                 diagram += `        direction TB\n`;
                 diagram += securityControlsContent;
                 diagram += `    end\n`;
@@ -1954,7 +2068,7 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
             if (hasWAF) {
                 const wafNodeID = sanitize(wafName);
                 wafNode = `waf_${wafNodeID}`;
-                diagram += `    ${wafNode}["**WAF**: ${wafName}"];\n`;
+                diagram += `    ${wafNode}["**WAAP**<br>${wafName}"];\n`;
 
                 if (botDefenseNode) {
                     diagram += `    ${botDefenseNode} e${edges}@--> ${wafNode};\n`;
@@ -1997,6 +2111,9 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
 
             diagram += `    Routes["**Routes**"];\n`;
 
+            // Track processed pools to avoid duplicate node generation (for both default and regular routes)
+            const processedPools = new Set();
+
             // Default Route
             if (lb.get_spec?.default_route_pools?.length > 0) {
                 diagram += `    DefaultRoute["**Default Route**"];\n`;
@@ -2030,12 +2147,15 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
 
                     diagram += `    DefaultRoute --> ${poolID}["${poolLabel}"];\n`;
 
-                    // Add origin servers if available
-                    if (originPoolData?.get_spec?.origin_servers?.length > 0) {
-                        console.log(`🔗 [DIAGRAM] Adding ${originPoolData.get_spec.origin_servers.length} servers for pool '${pool.pool.name}'`);
+                    // Add origin servers if available and not already processed (Fix: Single Pool→Node connections for default routes)
+                    if (originPoolData?.get_spec?.origin_servers?.length > 0 && !processedPools.has(pool.pool.name)) {
+                        console.log(`[DIAGRAM] Adding ${originPoolData.get_spec.origin_servers.length} servers for default route pool '${pool.pool.name}'`);
                         diagram += generateOriginServerNodes(originPoolData, poolID, siteDataMap);
+                        processedPools.add(pool.pool.name); // Mark as processed
+                    } else if (processedPools.has(pool.pool.name)) {
+                        console.log(`[DIAGRAM] Skipping already processed default route pool '${pool.pool.name}'`);
                     } else {
-                        console.log(` [DIAGRAM] No origin servers to add for pool '${pool.pool.name}'`);
+                        console.log(`[DIAGRAM] No origin servers to add for default route pool '${pool.pool.name}'`);
                     }
                 }
             }
@@ -2043,7 +2163,17 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
             // Process Routes
             if (lb.get_spec?.routes) {
                 lb.get_spec.routes.forEach((route, i) => {
-                    const routeColorIndex = i % routeColors.length;
+                    // Determine route type for coloring (Task 3: Route type color coding)
+                    let routeType = 'default';
+                    if (route.simple_route) {
+                        routeType = 'simple';
+                    } else if (route.redirect_route) {
+                        routeType = 'redirect';
+                    } else if (route.direct_response_route) {
+                        routeType = 'direct_response';
+                    } else {
+                        routeType = 'custom';
+                    }
                     if (route.simple_route) {
                         const matchConditions = ["**Route**"];
 
@@ -2064,10 +2194,10 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                         const nodeID = `route_${i}`;
                         const matchLabel = matchConditions.join(" <BR> ");
                         diagram += `    ${nodeID}["${matchLabel}"];\n`;
-                        diagram += `    class ${nodeID} route${routeColorIndex};\n`;
+                        diagram += `    class ${nodeID} route_${routeType};\n`;
                         const routeEdgeId = `re${edges}`;
                         diagram += `    Routes ${routeEdgeId}@--> ${nodeID};\n`;
-                        diagram += `    class ${routeEdgeId} routeLine${routeColorIndex};\n`;
+                        diagram += `    class ${routeEdgeId} routeLine_${routeType};\n`;
                         edges++;
 
                         // Route-specific WAF
@@ -2075,12 +2205,12 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                         if (routeWAF) {
                             const routeWafNodeID = `waf_${sanitize(routeWAF)}`;
                             if (!wafAdded.has(routeWafNodeID)) {
-                                diagram += `    ${routeWafNodeID}["**WAF**: ${routeWAF}"];\n`;
+                                diagram += `    ${routeWafNodeID}["**WAAP Override**<br>${routeWAF}"];\n`;
                                 wafAdded.set(routeWafNodeID, true);
                             }
                             const wafEdgeId = `we${edges}`;
                             diagram += `    ${nodeID} ${wafEdgeId}@--> ${routeWafNodeID};\n`;
-                            diagram += `    class ${wafEdgeId} routeLine${routeColorIndex};\n`;
+                            diagram += `    class ${wafEdgeId} routeLine_${routeType};\n`;
                             edges++;
                         }
 
@@ -2116,22 +2246,25 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                                 const routeWafNodeID = `waf_${sanitize(routeWAF)}`;
                                 const poolEdgeId = `pe${edges}`;
                                 diagram += `    ${routeWafNodeID} ${poolEdgeId}@--> ${poolID};\n`;
-                                diagram += `    class ${poolEdgeId} routeLine${routeColorIndex};\n`;
+                                diagram += `    class ${poolEdgeId} routeLine_${routeType};\n`;
                                 edges++;
                             } else {
                                 const poolEdgeId = `pe${edges}`;
                                 diagram += `    ${nodeID} ${poolEdgeId}@--> ${poolID};\n`;
-                                diagram += `    class ${poolEdgeId} routeLine${routeColorIndex};\n`;
+                                diagram += `    class ${poolEdgeId} routeLine_${routeType};\n`;
                                 edges++;
                             }
 
-                            // Add origin servers if available
-                            if (originPoolData?.get_spec?.origin_servers?.length > 0) {
-                                console.log(`🔗 [DIAGRAM] Adding ${originPoolData.get_spec.origin_servers.length} servers for route pool '${pool.pool.name}'`);
-                                diagram += generateOriginServerNodes(originPoolData, poolIDName, siteDataMap, routeColorIndex, edges);
+                            // Add origin servers if available and not already processed (Fix: Single Pool→Node connections)
+                            if (originPoolData?.get_spec?.origin_servers?.length > 0 && !processedPools.has(pool.pool.name)) {
+                                console.log(`[DIAGRAM] Adding ${originPoolData.get_spec.origin_servers.length} servers for route pool '${pool.pool.name}'`);
+                                diagram += generateOriginServerNodes(originPoolData, poolIDName, siteDataMap, routeType, edges);
                                 edges += originPoolData.get_spec.origin_servers.length;
+                                processedPools.add(pool.pool.name); // Mark as processed
+                            } else if (processedPools.has(pool.pool.name)) {
+                                console.log(`[DIAGRAM] Skipping already processed pool '${pool.pool.name}'`);
                             } else {
-                                console.log(` [DIAGRAM] No origin servers to add for route pool '${pool.pool.name}'`);
+                                console.log(`[DIAGRAM] No origin servers to add for route pool '${pool.pool.name}'`);
                             }
                         });
 
@@ -2139,17 +2272,65 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                         const nodeID = `redirect_${i}`;
                         const redirectTarget = `${route.redirect_route.route_redirect.host_redirect}${route.redirect_route.route_redirect.path_redirect}`;
                         diagram += `    ${nodeID}["**Redirect Route**<br>Path: ${route.redirect_route.path.prefix}"];\n`;
-                        diagram += `    class ${nodeID} route${routeColorIndex};\n`;
+                        diagram += `    class ${nodeID} route_${routeType};\n`;
                         const redirectEdgeId = `rde${edges}`;
                         diagram += `    Routes ${redirectEdgeId}@--> ${nodeID};\n`;
-                        diagram += `    class ${redirectEdgeId} routeLine${routeColorIndex};\n`;
+                        diagram += `    class ${redirectEdgeId} routeLine_${routeType};\n`;
                         edges++;
                         const targetEdgeId = `te${edges}`;
                         diagram += `    ${nodeID} ${targetEdgeId}@-->|Redirects to| redirect_target_${i}["${redirectTarget}"];\n`;
-                        diagram += `    class ${targetEdgeId} routeLine${routeColorIndex};\n`;
+                        diagram += `    class ${targetEdgeId} routeLine_${routeType};\n`;
                         edges++;
                     }
                 });
+            }
+
+            // CDN Flow Rendering (disconnected from main flow)
+            if (cdnLoadBalancers && cdnLoadBalancers.length > 0) {
+                console.log(`[DIAGRAM] Processing ${cdnLoadBalancers.length} CDN load balancers`);
+                
+                try {
+                    // Check for CDN in front of load balancer
+                    const lbDomains = lb.get_spec?.domains || [];
+                    
+                    cdnLoadBalancers.forEach((cdn, cdnIndex) => {
+                        if (!cdn || !cdn.get_spec) return; // Skip invalid CDN configs
+                        
+                        const cdnOriginDomain = cdn.get_spec?.origin_pool?.public_name?.dns_name || 
+                                               cdn.get_spec?.origin_pool?.origin_servers?.[0]?.public_name?.dns_name;
+                        
+                        // Check if this CDN points to our load balancer
+                        const isCDNInFront = cdnOriginDomain && lbDomains.includes(cdnOriginDomain);
+                    
+                    if (isCDNInFront) {
+                        // CDN in front of load balancer flow
+                        const cdnNodeId = `cdn_front_${sanitize(cdn.name)}`;
+                        const cdnDomains = cdn.get_spec?.domains || [];
+                        // Escape domain names to prevent Mermaid syntax errors and URL encoding issues
+                        const escapedDomains = cdnDomains.map(d => d ? d.replace(/[<>\"'&%]/g, '') : '').join(', ');
+                        const escapedCDNName = cdn.name ? cdn.name.replace(/[<>\"'&%]/g, '') : 'Unknown CDN';
+                        
+                        diagram += `\n    %% CDN in front of Load Balancer\n`;
+                        diagram += `    User --> ${cdnNodeId};\n`;
+                        diagram += `    ${cdnNodeId}["**CDN: ${escapedCDNName}**<br>Domains: ${escapedDomains}<br>Cache TTL: ${cdn.get_spec?.default_cache_action?.cache_ttl_default || 'default'}"];\n`;
+                        
+                        // Show cache rules if present, then connect directly to LoadBalancer
+                        if (cdn.get_spec?.cache_rules?.length > 0) {
+                            const cacheRuleId = `cache_rules_${cdnIndex}`;
+                            diagram += `    ${cdnNodeId} --> ${cacheRuleId}["**Cache Rules**<br>${cdn.get_spec.cache_rules.length} rules configured"];\n`;
+                            diagram += `    ${cacheRuleId} --> LoadBalancer;\n`;
+                        } else {
+                            diagram += `    ${cdnNodeId} --> LoadBalancer;\n`;
+                        }
+                        
+                        diagram += `    style ${cdnNodeId} fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px;\n`;
+                    }
+                });
+                
+                } catch (cdnError) {
+                    console.error('[DIAGRAM] Error rendering CDN flows:', cdnError);
+                    // Continue with diagram generation even if CDN rendering fails
+                }
             }
 
             // Apply animation to all regular edges (restored for Mermaid v11.7+)
