@@ -240,7 +240,7 @@ class ExtensionLogger {
 Generated: ${new Date().toISOString()}
 Total Debug Entries: ${this.logs.length}
 Total API Entries: ${this.apiLogs.length}
-Extension Version: 1.5
+Extension Version: 1.5.1
 
 ${'='.repeat(80)}
 DEBUG LOGS
@@ -863,7 +863,7 @@ async function fetchOriginPoolsForLoadBalancer(tabId, namespace, loadBalancer) {
 
     if (referencedPoolNames.size === 0) {
         console.log(` [BACKGROUND] No origin pools to fetch`);
-        return { 
+        return {
             pools: [],
             baseUrl: null,
             csrfToken: null,
@@ -927,7 +927,7 @@ async function fetchOriginPoolsForLoadBalancer(tabId, namespace, loadBalancer) {
         );
 
         console.log(` [BACKGROUND] Filtered to ${relevantPools.length} relevant origin pools`);
-        return { 
+        return {
             pools: relevantPools,
             baseUrl,
             csrfToken,
@@ -938,7 +938,7 @@ async function fetchOriginPoolsForLoadBalancer(tabId, namespace, loadBalancer) {
         console.error(` [BACKGROUND] Origin pools fetch failed:`, error);
         // Don't fail the whole diagram generation if origin pools fail
         console.log(` [BACKGROUND] Continuing diagram generation without origin pool details`);
-        return { 
+        return {
             pools: [],
             baseUrl: null,
             csrfToken: null,
@@ -1357,10 +1357,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     .then(result => {
                         console.log("🎆 Fetched origin pools, generating enhanced diagram");
                         return generateMermaidDiagramEnhanced(
-                            lbObject, 
-                            result.pools, 
-                            result.baseUrl, 
-                            result.csrfToken, 
+                            lbObject,
+                            result.pools,
+                            result.baseUrl,
+                            result.csrfToken,
                             result.managedTenant
                         );
                     })
@@ -1538,7 +1538,7 @@ function generateOriginServerNodes(originPoolData, poolID, siteDataMap = null, r
             if (siteLocator.site?.name) {
                 const siteName = siteLocator.site.name;
                 serverLabel += `<br>Site: ${siteName}`;
-                
+
                 // Add RE information if site data is available
                 if (siteDataMap && siteDataMap.has(siteName)) {
                     const siteData = siteDataMap.get(siteName);
@@ -1546,27 +1546,27 @@ function generateOriginServerNodes(originPoolData, poolID, siteDataMap = null, r
                         // Get connected REs
                         const connectedREs = siteData.spec.connected_re || [];
                         const configREs = siteData.spec.connected_re_for_config || [];
-                        
+
                         // Create a set of config RE names for easy lookup
                         const configRENames = new Set(configREs.map(re => re.name).filter(name => name));
-                        
+
                         // Add all unique REs with appropriate labels
                         const allRENames = new Set();
-                        
+
                         // Add connected REs
                         connectedREs.forEach(re => {
                             if (re.name) {
                                 allRENames.add(re.name);
                             }
                         });
-                        
+
                         // Add config REs
                         configREs.forEach(re => {
                             if (re.name) {
                                 allRENames.add(re.name);
                             }
                         });
-                        
+
                         // Display REs with Config annotation where appropriate
                         if (allRENames.size > 0) {
                             const reList = Array.from(allRENames).map(reName => {
@@ -1642,7 +1642,7 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                         } else if (server.vk8s_service?.site_locator) {
                             siteLocator = server.vk8s_service.site_locator;
                         }
-                        
+
                         // Collect site names (not virtual sites)
                         if (siteLocator?.site?.name) {
                             allSiteNames.add(siteLocator.site.name);
@@ -1694,7 +1694,7 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
             diagram += `    classDef certError stroke:#B22222,stroke-width:2px;\n`;
             diagram += `    classDef noWaf fill:#FF5733,stroke:#B22222,stroke-width:2px;\n`;
             diagram += `    classDef animate stroke-dasharray: 9,5,stroke-dashoffset: 900,animation: dash 25s linear infinite;\n`;
-            
+
             // Define route color classes - distinct colors for up to 10 routes
             const routeColors = [
                 '#4A90E2', // Blue
@@ -1708,7 +1708,7 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                 '#20B2AA', // Light Sea Green
                 '#FF69B4'  // Hot Pink
             ];
-            
+
             routeColors.forEach((color, index) => {
                 diagram += `    classDef route${index} fill:${color}20,stroke:${color},stroke-width:3px;\n`;
                 diagram += `    classDef routeLine${index} stroke:${color},stroke-width:2px,stroke-dasharray:9 5,stroke-dashoffset:900,animation:dash 25s linear infinite;\n`;
