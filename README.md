@@ -15,6 +15,8 @@ A Chrome extension that generates traffic flow diagrams from F5 Distributed Clou
 
    Download Release [https://github.com/Mikej81/xcshowmap-extension/releases](https://github.com/Mikej81/xcshowmap-extension/releases)
 
+   Extract to prefered location.
+
 2. **Open Chrome Extensions Page**
    - Navigate to `chrome://extensions/` in your Chrome browser
    - Or click the three dots menu → More tools → Extensions
@@ -24,8 +26,9 @@ A Chrome extension that generates traffic flow diagrams from F5 Distributed Clou
 
 4. **Load the Extension**
    - Click "Load unpacked" button
-   - Select the `xcshowmap-extension` folder from the cloned repository
+   - Select the `xcshowmap-extension` folder from the cloned repository / downloaded release.
    - The extension should now appear in your extensions list
+   - Be sure to enable "Pin to toolbar"
 
 5. **Verify Installation**
    - Look for "XC Service Flow Mapper" in your extensions
