@@ -1849,7 +1849,12 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                     }
 
                     const domainNodeID = sanitize(domain);
-                    const domainNode = `domain_${domainNodeID}["**Certificate**<br>${domain}<br>Status: ${certStateDisplay}<br>Exp: ${certExpiration}"]`;
+                    // Break up patterns that Mermaid interprets as markdown links
+                    // Insert zero-width character (U+200B) after "www" and "http" patterns
+                    let escapedDomain = domain;
+                    escapedDomain = escapedDomain.replace(/^www\./i, 'www\u200B.');
+                    escapedDomain = escapedDomain.replace(/^https?:\/\//i, (match) => match.replace('://', ':\u200B//'));
+                    const domainNode = `domain_${domainNodeID}["**Certificate**<br>${escapedDomain}<br>Status: ${certStateDisplay}<br>Exp: ${certExpiration}"]`;
 
                     diagram += `    LoadBalancer e${edges}@-- SNI --> ${domainNode};\n`;
                     edges++;
