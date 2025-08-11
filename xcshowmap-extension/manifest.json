@@ -1,6 +1,6 @@
 {
     "name": "XC Service Flow Mapper",
-    "version": "1.5.6",
+    "version": "1.5.7",
     "manifest_version": 3,
     "description": "Generate and display traffic flow diagrams from F5 Distributed Cloud console API responses.",
     "permissions": [
