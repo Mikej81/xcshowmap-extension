@@ -10,3 +10,5 @@ test_security_features.js
 .DS_Store
 context
 screen*.png
+example_mermaid
+test_*
