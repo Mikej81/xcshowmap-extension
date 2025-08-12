@@ -6,12 +6,7 @@ A Chrome extension that generates traffic flow diagrams from F5 Distributed Clou
 
 ### Install as Unpacked Extension (Development Mode)
 
-1. **Download/Clone the Repository or Download latest Release**
-
-   ```bash
-   git clone https://github.com/your-repo/xcshowmap-extension.git
-   cd xcshowmap-extension
-   ```
+1. **Download latest Release**
 
    Download Release [https://github.com/Mikej81/xcshowmap-extension/releases](https://github.com/Mikej81/xcshowmap-extension/releases)
 
@@ -68,7 +63,7 @@ A Chrome extension that generates traffic flow diagrams from F5 Distributed Clou
 ### Common Issues
 
 1. **"Please refresh page" Message**
-   - **Solution**: Refresh the F5XC console page to capture authentication tokens
+   - **Solution**: Refresh the XC console page to capture tokens and scrape fetched json.
    - The extension needs to capture CSRF tokens from the initial page load
 
 2. **"No Load Balancers Found" Error**
@@ -84,7 +79,7 @@ A Chrome extension that generates traffic flow diagrams from F5 Distributed Clou
 
 ### Debug Logging
 
-The extension includes comprehensive logging for troubleshooting:
+The extension includes logging for troubleshooting:
 
 1. **Access Debug Logs**
    - Click the extension icon
