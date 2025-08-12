@@ -240,7 +240,7 @@ class ExtensionLogger {
 Generated: ${new Date().toISOString()}
 Total Debug Entries: ${this.logs.length}
 Total API Entries: ${this.apiLogs.length}
-Extension Version: 1.5.7
+Extension Version: 1.5.8
 
 ${'='.repeat(80)}
 DEBUG LOGS
@@ -349,7 +349,7 @@ class APIResponse {
             } else if (route.redirect_route) {
                 return {
                     type: "redirect",
-                    path: route.redirect_route.path.prefix,
+                    path: route.redirect_route.path?.prefix || null,
                     headers: route.redirect_route.headers || [],
                     hostRedirect: route.redirect_route.route_redirect.host_redirect,
                     pathRedirect: route.redirect_route.route_redirect.path_redirect
@@ -2190,7 +2190,8 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
 
                         route.simple_route.headers?.forEach(header => {
                             if (header.regex) {
-                                matchConditions.push(`Header Regex: ${header.name} ~ ${header.regex}`);                               }
+                                matchConditions.push(`Header Regex: ${header.name} ~ ${header.regex}`);
+                            }
                             else if (header.exact) {
                                 matchConditions.push(`Header Exact: ${header.name} = ${header.exact}`);
                             } else {
@@ -2289,7 +2290,8 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                                 matchConditionsRedirect.push(`Header Match: ${header.name}`);
                             }
                         });
-                        diagram += `    ${nodeID}["**Redirect Route**<br>Path: ${route.redirect_route.path.prefix} \n ${matchConditionsRedirect}"];\n`;
+                        const pathDisplay = route.redirect_route.path?.prefix ? `Path: ${route.redirect_route.path.prefix}<br>` : '';
+                        diagram += `    ${nodeID}["**Redirect Route**<br>${pathDisplay}${matchConditionsRedirect}"];\n`;
                         diagram += `    class ${nodeID} route_${routeType};\n`;
                         const redirectEdgeId = `rde${edges}`;
                         diagram += `    Routes ${redirectEdgeId}@--> ${nodeID};\n`;
