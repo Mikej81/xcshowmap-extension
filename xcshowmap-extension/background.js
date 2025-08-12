@@ -1816,7 +1816,7 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
             // Define route type colors (Task 3: Route type color coding)
             const routeTypeColors = {
                 'default': '#808080',    // Grey
-                'simple': '#6BCF7F',     // Green  
+                'simple': '#6BCF7F',     // Green
                 'redirect': '#7B68EE',   // Purple
                 'direct_response': '#4A90E2', // Blue
                 'custom': '#FFA500'      // Orange
@@ -2190,7 +2190,9 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
 
                         route.simple_route.headers?.forEach(header => {
                             if (header.regex) {
-                                matchConditions.push(`Header Regex: ${header.name} ~ ${header.regex}`);
+                                matchConditions.push(`Header Regex: ${header.name} ~ ${header.regex}`);                               }
+                            else if (header.exact) {
+                                matchConditions.push(`Header Exact: ${header.name} = ${header.exact}`);
                             } else {
                                 matchConditions.push(`Header Match: ${header.name}`);
                             }
@@ -2275,8 +2277,19 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
 
                     } else if (route.redirect_route) {
                         const nodeID = `redirect_${i}`;
+                        const matchConditionsRedirect = [];
                         const redirectTarget = `${route.redirect_route.route_redirect.host_redirect}${route.redirect_route.route_redirect.path_redirect}`;
-                        diagram += `    ${nodeID}["**Redirect Route**<br>Path: ${route.redirect_route.path.prefix}"];\n`;
+
+                        route.redirect_route.headers?.forEach(header => {
+                            if (header.regex) {
+                                matchConditionsRedirect.push(`Header Regex: ${header.name} ~ ${header.regex}`);
+                            } else if (header.exact) {
+                                matchConditionsRedirect.push(`Header Exact: ${header.name} = ${header.exact}`);
+                            } else {
+                                matchConditionsRedirect.push(`Header Match: ${header.name}`);
+                            }
+                        });
+                        diagram += `    ${nodeID}["**Redirect Route**<br>Path: ${route.redirect_route.path.prefix} \n ${matchConditionsRedirect}"];\n`;
                         diagram += `    class ${nodeID} route_${routeType};\n`;
                         const redirectEdgeId = `rde${edges}`;
                         diagram += `    Routes ${redirectEdgeId}@--> ${nodeID};\n`;
