@@ -3,6 +3,8 @@ origin_pools.json
 example_ce.json
 cdn_lb.json
 http_cdn_route_loadbalancers.json
+*.json
+*.mermaid
 showmap_ref.go
 *.zip
 logs
