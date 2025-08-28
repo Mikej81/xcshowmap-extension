@@ -240,7 +240,7 @@ class ExtensionLogger {
 Generated: ${new Date().toISOString()}
 Total Debug Entries: ${this.logs.length}
 Total API Entries: ${this.apiLogs.length}
-Extension Version: 1.5.9
+Extension Version: 1.6.0
 
 ${'='.repeat(80)}
 DEBUG LOGS
@@ -341,6 +341,7 @@ class APIResponse {
                 return {
                     type: "simple",
                     path: route.simple_route.path.prefix || route.simple_route.path.regex || "/",
+                    httpMethod: route.simple_route.http_method || "ANY",
                     headers: route.simple_route.headers || [],
                     originPools: route.simple_route.origin_pools?.map(pool => pool.pool.name) || [],
                     appFirewall: route.simple_route.advanced_options?.app_firewall?.name || null,
@@ -350,6 +351,7 @@ class APIResponse {
                 return {
                     type: "redirect",
                     path: route.redirect_route.path?.prefix || route.redirect_route.path?.path || null,
+                    httpMethod: route.redirect_route.http_method || "ANY",
                     headers: route.redirect_route.headers || [],
                     hostRedirect: route.redirect_route.route_redirect.host_redirect,
                     pathRedirect: route.redirect_route.route_redirect.path_redirect || null
@@ -358,6 +360,7 @@ class APIResponse {
                 return {
                     type: "direct_response",
                     path: route.direct_response_route.path.prefix,
+                    httpMethod: route.direct_response_route.http_method || "ANY",
                     responseCode: route.direct_response_route.route_direct_response.response_code,
                     responseBody: route.direct_response_route.route_direct_response.response_body
                 };
@@ -2228,18 +2231,22 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                     if (route.simple_route) {
                         const matchConditions = [`**Route ${i + 1}**`];
 
+                        // Add HTTP Method
+                        const httpMethod = route.simple_route.http_method || "ANY";
+                        matchConditions.push(`Method: ${httpMethod}`);
+
                         if (route.simple_route.path?.prefix) {
-                            matchConditions.push(`Path Match: ${route.simple_route.path.prefix}`);
+                            matchConditions.push(`Path Match: ${escapeForMermaid(route.simple_route.path.prefix)}`);
                         } else if (route.simple_route.path?.regex) {
-                            matchConditions.push(`Path Regex: ${route.simple_route.path.regex}`);
+                            matchConditions.push(`Path Regex: ${escapeForMermaid(route.simple_route.path.regex)}`);
                         }
 
                         route.simple_route.headers?.forEach(header => {
                             if (header.regex) {
-                                matchConditions.push(`Header Regex: ${header.name} ~ ${header.regex}`);
+                                matchConditions.push(`Header Regex: ${header.name} ~ ${escapeForMermaid(header.regex)}`);
                             }
                             else if (header.exact) {
-                                matchConditions.push(`Header Exact: ${header.name} = ${header.exact}`);
+                                matchConditions.push(`Header Exact: ${header.name} = ${escapeForMermaid(header.exact)}`);
                             } else {
                                 matchConditions.push(`Header Match: ${header.name}`);
                             }
@@ -2332,15 +2339,17 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
 
                         route.redirect_route.headers?.forEach(header => {
                             if (header.regex) {
-                                matchConditionsRedirect.push(`Header Regex: ${header.name} ~ ${header.regex}`);
+                                matchConditionsRedirect.push(`Header Regex: ${header.name} ~ ${escapeForMermaid(header.regex)}`);
                             } else if (header.exact) {
-                                matchConditionsRedirect.push(`Header Exact: ${header.name} = ${header.exact}`);
+                                matchConditionsRedirect.push(`Header Exact: ${header.name} = ${escapeForMermaid(header.exact)}`);
                             } else {
                                 matchConditionsRedirect.push(`Header Match: ${header.name}`);
                             }
                         });
-                        const pathDisplay = (route.redirect_route.path?.prefix || route.redirect_route.path?.path) ? `Path: ${route.redirect_route.path?.prefix || route.redirect_route.path?.path}<br>` : '';
-                        diagram += `    ${nodeID}["**Redirect Route ${i + 1}**<br>${pathDisplay}${matchConditionsRedirect}"];\n`;
+                        const httpMethod = route.redirect_route.http_method || "ANY";
+                        const methodDisplay = `Method: ${httpMethod}<br>`;
+                        const pathDisplay = (route.redirect_route.path?.prefix || route.redirect_route.path?.path) ? `Path: ${escapeForMermaid(route.redirect_route.path?.prefix || route.redirect_route.path?.path)}<br>` : '';
+                        diagram += `    ${nodeID}["**Redirect Route ${i + 1}**<br>${methodDisplay}${pathDisplay}${matchConditionsRedirect}"];\n`;
                         diagram += `    class ${nodeID} route_${routeType};\n`;
                         const redirectEdgeId = `rde${edges}`;
                         diagram += `    Routes ${redirectEdgeId}@--> ${nodeID};\n`;
@@ -2352,10 +2361,12 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                         edges++;
                     } else if (route.direct_response_route) {
                         const nodeID = `direct_response_${i}`;
-                        const pathDisplay = route.direct_response_route.path?.prefix ? `Path: ${route.direct_response_route.path.prefix}<br>` : '';
+                        const httpMethod = route.direct_response_route.http_method || "ANY";
+                        const methodDisplay = `Method: ${httpMethod}<br>`;
+                        const pathDisplay = route.direct_response_route.path?.prefix ? `Path: ${escapeForMermaid(route.direct_response_route.path.prefix)}<br>` : '';
                         const responseInfo = `Response Code: ${route.direct_response_route.route_direct_response.response_code}<br>Body: ${route.direct_response_route.route_direct_response.response_body || 'Empty'}`;
 
-                        diagram += `    ${nodeID}["**Direct Response ${i + 1}**<br>${pathDisplay}${responseInfo}"];\n`;
+                        diagram += `    ${nodeID}["**Direct Response ${i + 1}**<br>${methodDisplay}${pathDisplay}${responseInfo}"];\n`;
                         diagram += `    class ${nodeID} route_${routeType};\n`;
                         const directEdgeId = `dre${edges}`;
                         diagram += `    Routes ${directEdgeId}@--> ${nodeID};\n`;
