@@ -240,7 +240,7 @@ class ExtensionLogger {
 Generated: ${new Date().toISOString()}
 Total Debug Entries: ${this.logs.length}
 Total API Entries: ${this.apiLogs.length}
-Extension Version: 1.5.8
+Extension Version: 1.5.9
 
 ${'='.repeat(80)}
 DEBUG LOGS
@@ -625,7 +625,7 @@ function notifyContentScript(tabId, csrfToken, isManagedTenant = false) {
     if (!tabData[tabId]) {
         tabData[tabId] = { urls: [], csrf_token: null, managed_tenant_csrf: null, managed_tenant: null };
     }
-    
+
     // Store the token in appropriate field
     if (isManagedTenant) {
         tabData[tabId].managed_tenant_csrf = csrfToken;
@@ -1983,18 +1983,18 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                 enabledControls.forEach((control) => {
                     // Add the main control node
                     securityControlsContent += `        ${control.id}["${control.label}"];\n`;
-                    
+
                     // If this is service policies with individual policies, add them as a chain
                     if (control.hasPolicies && control.policies) {
                         let previousPolicyId = control.id; // Start with the main Service Policies box
                         control.policies.forEach((policy, idx) => {
                             const policyId = `sp_policy_${idx}`;
-                            const policyLabel = policy.namespace === 'shared' 
-                                ? `${escapeForMermaid(policy.name)}<br><i>shared</i>` 
+                            const policyLabel = policy.namespace === 'shared'
+                                ? `${escapeForMermaid(policy.name)}<br><i>shared</i>`
                                 : escapeForMermaid(policy.name);
                             securityControlsContent += `        ${policyId}["${policyLabel}"];\n`;
                             securityControlsContent += `        style ${policyId} fill:#f0f8ff,stroke:#4169e1,stroke-width:1px;\n`;
-                            
+
                             // Connect to previous policy in chain (or main Service Policies box for first policy)
                             securityControlsContent += `        ${previousPolicyId} --> ${policyId};\n`;
                             previousPolicyId = policyId; // Update for next iteration
@@ -2326,7 +2326,7 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                         const nodeID = `redirect_${i}`;
                         const matchConditionsRedirect = [];
                         const redirectTarget = `${route.redirect_route.route_redirect.host_redirect}${route.redirect_route.route_redirect.path_redirect || ''}`;
-                        
+
                         // Escape the redirect target to prevent Mermaid from interpreting as markdown link
                         let escapedRedirectTarget = escapeForMermaid(redirectTarget);
 
@@ -2354,7 +2354,7 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                         const nodeID = `direct_response_${i}`;
                         const pathDisplay = route.direct_response_route.path?.prefix ? `Path: ${route.direct_response_route.path.prefix}<br>` : '';
                         const responseInfo = `Response Code: ${route.direct_response_route.route_direct_response.response_code}<br>Body: ${route.direct_response_route.route_direct_response.response_body || 'Empty'}`;
-                        
+
                         diagram += `    ${nodeID}["**Direct Response ${i + 1}**<br>${pathDisplay}${responseInfo}"];\n`;
                         diagram += `    class ${nodeID} route_${routeType};\n`;
                         const directEdgeId = `dre${edges}`;
@@ -2371,7 +2371,7 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                                 customRouteLabel += `<br>Namespace: ${routeRef.namespace}`;
                             }
                         }
-                        
+
                         diagram += `    ${nodeID}["${customRouteLabel}"];\n`;
                         diagram += `    class ${nodeID} route_${routeType};\n`;
                         const customEdgeId = `cre${edges}`;
