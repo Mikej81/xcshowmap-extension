@@ -240,7 +240,7 @@ class ExtensionLogger {
 Generated: ${new Date().toISOString()}
 Total Debug Entries: ${this.logs.length}
 Total API Entries: ${this.apiLogs.length}
-Extension Version: 1.5.8
+Extension Version: 1.6.0
 
 ${'='.repeat(80)}
 DEBUG LOGS
@@ -341,6 +341,7 @@ class APIResponse {
                 return {
                     type: "simple",
                     path: route.simple_route.path.prefix || route.simple_route.path.regex || "/",
+                    httpMethod: route.simple_route.http_method || "ANY",
                     headers: route.simple_route.headers || [],
                     originPools: route.simple_route.origin_pools?.map(pool => pool.pool.name) || [],
                     appFirewall: route.simple_route.advanced_options?.app_firewall?.name || null,
@@ -349,17 +350,25 @@ class APIResponse {
             } else if (route.redirect_route) {
                 return {
                     type: "redirect",
-                    path: route.redirect_route.path?.prefix || null,
+                    path: route.redirect_route.path?.prefix || route.redirect_route.path?.path || null,
+                    httpMethod: route.redirect_route.http_method || "ANY",
                     headers: route.redirect_route.headers || [],
                     hostRedirect: route.redirect_route.route_redirect.host_redirect,
-                    pathRedirect: route.redirect_route.route_redirect.path_redirect
+                    pathRedirect: route.redirect_route.route_redirect.path_redirect || null
                 };
             } else if (route.direct_response_route) {
                 return {
                     type: "direct_response",
                     path: route.direct_response_route.path.prefix,
+                    httpMethod: route.direct_response_route.http_method || "ANY",
                     responseCode: route.direct_response_route.route_direct_response.response_code,
                     responseBody: route.direct_response_route.route_direct_response.response_body
+                };
+            } else if (route.custom_route_object) {
+                return {
+                    type: "custom",
+                    routeRef: route.custom_route_object.route_ref?.name || null,
+                    namespace: route.custom_route_object.route_ref?.namespace || null
                 };
             }
             return null;
@@ -413,7 +422,7 @@ chrome.webRequest.onCompleted.addListener(
                                 tabData[details.tabId].managed_tenant_csrf = csrfToken;
                                 logger.info("Managed tenant CSRF token captured", {
                                     tabId: details.tabId,
-                                    managedTenant: tabData[details.tabId].managed_tenant,
+                                    managedTenant: tabData[details.tabId]?.managed_tenant,
                                     tokenSource: "URL parameter",
                                     url: details.url
                                 });
@@ -440,7 +449,7 @@ chrome.webRequest.onCompleted.addListener(
                                     tabData[details.tabId].managed_tenant_csrf = header.value;
                                     logger.info("Managed tenant CSRF token captured", {
                                         tabId: details.tabId,
-                                        managedTenant: tabData[details.tabId].managed_tenant,
+                                        managedTenant: tabData[details.tabId]?.managed_tenant,
                                         tokenSource: "X-CSRF-Token header",
                                         url: details.url
                                     });
@@ -479,7 +488,7 @@ chrome.webRequest.onCompleted.addListener(
                                             tabData[details.tabId].managed_tenant_csrf = match[1];
                                             logger.info("Managed tenant CSRF token captured", {
                                                 tabId: details.tabId,
-                                                managedTenant: tabData[details.tabId].managed_tenant,
+                                                managedTenant: tabData[details.tabId]?.managed_tenant,
                                                 tokenSource: "Set-Cookie header",
                                                 cookiePattern: pattern.toString(),
                                                 url: details.url
@@ -596,8 +605,30 @@ chrome.webRequest.onCompleted.addListener(
 // Global map to track API requests
 let apiRequestMap = new Map();
 
+// Helper function to escape domains/URLs to prevent Mermaid from interpreting as markdown links
+function escapeForMermaid(text) {
+    if (!text) return text;
+    let escaped = text;
+    // Break up patterns that Mermaid might interpret as markdown links
+    escaped = escaped.replace(/^www\./gi, 'www\u200B.');
+    escaped = escaped.replace(/^https?:\/\//gi, (match) => match.replace('://', ':\u200B//'));
+    escaped = escaped.replace(/\.com/gi, '.\u200Bcom');
+    escaped = escaped.replace(/\.org/gi, '.\u200Borg');
+    escaped = escaped.replace(/\.net/gi, '.\u200Bnet');
+    escaped = escaped.replace(/\.test/gi, '.\u200Btest');
+    escaped = escaped.replace(/\.io/gi, '.\u200Bio');
+    escaped = escaped.replace(/\.cloud/gi, '.\u200Bcloud');
+    escaped = escaped.replace(/\.example/gi, '.\u200Bexample');
+    return escaped;
+}
+
 // Helper function to notify content script of CSRF token with retry logic
 function notifyContentScript(tabId, csrfToken, isManagedTenant = false) {
+    // Ensure tabData[tabId] exists
+    if (!tabData[tabId]) {
+        tabData[tabId] = { urls: [], csrf_token: null, managed_tenant_csrf: null, managed_tenant: null };
+    }
+
     // Store the token in appropriate field
     if (isManagedTenant) {
         tabData[tabId].managed_tenant_csrf = csrfToken;
@@ -616,14 +647,14 @@ function notifyContentScript(tabId, csrfToken, isManagedTenant = false) {
             action: "csrfTokenCaptured",
             csrfToken: csrfToken,
             isManagedTenant: isManagedTenant,
-            managedTenant: tabData[tabId].managed_tenant
+            managedTenant: tabData[tabId]?.managed_tenant
         }).then(() => {
             const tokenType = isManagedTenant ? "managed tenant" : "top-level";
             console.log(` Successfully notified content script of ${tokenType} CSRF token`);
             logger.info("Content script notification successful", {
                 tabId: tabId,
                 tokenType: tokenType,
-                managedTenant: tabData[tabId].managed_tenant
+                managedTenant: tabData[tabId]?.managed_tenant
             });
         }).catch((error) => {
             if (attempts < maxAttempts) {
@@ -680,7 +711,7 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
                                 tabData[details.tabId].managed_tenant_csrf = header.value;
                                 logger.info("Managed tenant CSRF token captured", {
                                     tabId: details.tabId,
-                                    managedTenant: tabData[details.tabId].managed_tenant,
+                                    managedTenant: tabData[details.tabId]?.managed_tenant,
                                     tokenSource: "Request header",
                                     headerName: headerName,
                                     url: details.url
@@ -727,9 +758,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         if (tabData[tabId] && changeInfo.url) {
             console.log("Tab navigation detected, keeping CSRF tokens for tab:", tabId);
             // Keep CSRF tokens across navigation
-            const existingCsrf = tabData[tabId].csrf_token;
-            const existingManagedCsrf = tabData[tabId].managed_tenant_csrf;
-            const existingTenant = tabData[tabId].managed_tenant;
+            const existingCsrf = tabData[tabId]?.csrf_token;
+            const existingManagedCsrf = tabData[tabId]?.managed_tenant_csrf;
+            const existingTenant = tabData[tabId]?.managed_tenant;
 
             tabData[tabId] = {
                 urls: [],
@@ -855,10 +886,10 @@ async function fetchCDNLoadBalancers(tabId, namespace) {
 
     // Use appropriate CSRF token
     let csrfToken = null;
-    if (managedTenant && tabInfo.managed_tenant_csrf) {
-        csrfToken = tabInfo.managed_tenant_csrf;
-    } else if (tabInfo.csrf_token) {
-        csrfToken = tabInfo.csrf_token;
+    if (managedTenant && tabInfo?.managed_tenant_csrf) {
+        csrfToken = tabInfo?.managed_tenant_csrf;
+    } else if (tabInfo?.csrf_token) {
+        csrfToken = tabInfo?.csrf_token;
     } else {
         console.log('[BACKGROUND] No CSRF token available for CDN fetch');
         return [];
@@ -950,10 +981,10 @@ async function fetchOriginPoolsForLoadBalancer(tabId, namespace, loadBalancer) {
 
     // Use appropriate CSRF token
     let csrfToken = null;
-    if (managedTenant && tabInfo.managed_tenant_csrf) {
-        csrfToken = tabInfo.managed_tenant_csrf;
-    } else if (tabInfo.csrf_token) {
-        csrfToken = tabInfo.csrf_token;
+    if (managedTenant && tabInfo?.managed_tenant_csrf) {
+        csrfToken = tabInfo?.managed_tenant_csrf;
+    } else if (tabInfo?.csrf_token) {
+        csrfToken = tabInfo?.csrf_token;
     } else {
         throw new Error('No CSRF token available');
     }
@@ -1030,11 +1061,11 @@ async function fetchLoadBalancersDirectly(tabId, namespace) {
 
     // Use appropriate CSRF token
     let csrfToken = null;
-    if (managedTenant && tabInfo.managed_tenant_csrf) {
-        csrfToken = tabInfo.managed_tenant_csrf;
+    if (managedTenant && tabInfo?.managed_tenant_csrf) {
+        csrfToken = tabInfo?.managed_tenant_csrf;
         console.log(` Using managed tenant CSRF token`);
-    } else if (tabInfo.csrf_token) {
-        csrfToken = tabInfo.csrf_token;
+    } else if (tabInfo?.csrf_token) {
+        csrfToken = tabInfo?.csrf_token;
         console.log(` Using top-level CSRF token`);
     } else {
         throw new Error('No CSRF token available');
@@ -1258,22 +1289,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         // If we have CSRF tokens waiting for this tab, send them now
         if (tabId && tabData[tabId]) {
-            const hasTopLevel = !!tabData[tabId].csrf_token;
-            const hasManagedTenant = !!tabData[tabId].managed_tenant_csrf;
+            const hasTopLevel = !!tabData[tabId]?.csrf_token;
+            const hasManagedTenant = !!tabData[tabId]?.managed_tenant_csrf;
 
             if (hasTopLevel || hasManagedTenant) {
                 console.log("Sending waiting CSRF tokens to ready content script", {
                     topLevel: hasTopLevel,
                     managedTenant: hasManagedTenant,
-                    tenant: tabData[tabId].managed_tenant
+                    tenant: tabData[tabId]?.managed_tenant
                 });
 
                 chrome.tabs.sendMessage(tabId, {
                     action: "csrfTokensCaptured",
-                    csrfToken: tabData[tabId].csrf_token,
-                    managedTenantCsrf: tabData[tabId].managed_tenant_csrf,
-                    managedTenant: tabData[tabId].managed_tenant,
-                    isManagedTenant: !!tabData[tabId].managed_tenant
+                    csrfToken: tabData[tabId]?.csrf_token,
+                    managedTenantCsrf: tabData[tabId]?.managed_tenant_csrf,
+                    managedTenant: tabData[tabId]?.managed_tenant,
+                    isManagedTenant: !!tabData[tabId]?.managed_tenant
                 }).catch(() => {
                     // Still might not be ready, but we tried
                 });
@@ -1602,13 +1633,13 @@ function generateOriginServerNodes(originPoolData, poolID, siteDataMap = null, r
 
         // Determine server type and details from full API structure
         if (server.public_name?.dns_name) {
-            serverLabel += `<br>DNS: ${server.public_name.dns_name}`;
+            serverLabel += `<br>DNS: ${escapeForMermaid(server.public_name.dns_name)}`;
         } else if (server.public_ip?.ip) {
             serverLabel += `<br>IP: ${server.public_ip.ip}`;
         } else if (server.private_ip?.ip) {
             serverLabel += `<br>Private IP: ${server.private_ip.ip}`;
         } else if (server.private_name?.dns_name) {
-            serverLabel += `<br>Private DNS: ${server.private_name.dns_name}`;
+            serverLabel += `<br>Private DNS: ${escapeForMermaid(server.private_name.dns_name)}`;
         } else if (server.k8s_service) {
             serverLabel += `<br>K8s: ${server.k8s_service.service_name}`;
         } else if (server.vk8s_service) {
@@ -1849,11 +1880,8 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                     }
 
                     const domainNodeID = sanitize(domain);
-                    // Break up patterns that Mermaid interprets as markdown links
-                    // Insert zero-width character (U+200B) after "www" and "http" patterns
-                    let escapedDomain = domain;
-                    escapedDomain = escapedDomain.replace(/^www\./i, 'www\u200B.');
-                    escapedDomain = escapedDomain.replace(/^https?:\/\//i, (match) => match.replace('://', ':\u200B//'));
+                    // Escape domain to prevent Mermaid from interpreting as markdown link
+                    let escapedDomain = escapeForMermaid(domain);
                     const domainNode = `domain_${domainNodeID}["**Certificate**<br>${escapedDomain}<br>Status: ${certStateDisplay}<br>Exp: ${certExpiration}"]`;
 
                     diagram += `    LoadBalancer e${edges}@-- SNI --> ${domainNode};\n`;
@@ -1867,11 +1895,15 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
             const enabledControls = [];
 
             // Service Policies - only show if configured
+            let servicePoliciesData = null;
             if (lb.get_spec?.active_service_policies?.policies?.length > 0) {
                 hasSecurityControls = true;
+                servicePoliciesData = lb.get_spec.active_service_policies.policies;
                 enabledControls.push({
                     id: 'sp_policies',
-                    label: `**Service Policies**<br>Policies: ${lb.get_spec.active_service_policies.policies.length}`
+                    label: `**Service Policies (${lb.get_spec.active_service_policies.policies.length})**`,
+                    hasPolicies: true,
+                    policies: servicePoliciesData
                 });
             } else if (lb.get_spec?.service_policies_from_namespace) {
                 hasSecurityControls = true;
@@ -1952,8 +1984,25 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
             // Build security controls list - no internal connectors
             if (enabledControls.length > 0) {
                 enabledControls.forEach((control) => {
-                    // Add the main control node (no sub-items, no internal connections)
+                    // Add the main control node
                     securityControlsContent += `        ${control.id}["${control.label}"];\n`;
+
+                    // If this is service policies with individual policies, add them as a chain
+                    if (control.hasPolicies && control.policies) {
+                        let previousPolicyId = control.id; // Start with the main Service Policies box
+                        control.policies.forEach((policy, idx) => {
+                            const policyId = `sp_policy_${idx}`;
+                            const policyLabel = policy.namespace === 'shared'
+                                ? `${escapeForMermaid(policy.name)}<br><i>shared</i>`
+                                : escapeForMermaid(policy.name);
+                            securityControlsContent += `        ${policyId}["${policyLabel}"];\n`;
+                            securityControlsContent += `        style ${policyId} fill:#f0f8ff,stroke:#4169e1,stroke-width:1px;\n`;
+
+                            // Connect to previous policy in chain (or main Service Policies box for first policy)
+                            securityControlsContent += `        ${previousPolicyId} --> ${policyId};\n`;
+                            previousPolicyId = policyId; // Update for next iteration
+                        });
+                    }
                 });
             }
 
@@ -2180,20 +2229,24 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                         routeType = 'custom';
                     }
                     if (route.simple_route) {
-                        const matchConditions = ["**Route**"];
+                        const matchConditions = [`**Route ${i + 1}**`];
+
+                        // Add HTTP Method
+                        const httpMethod = route.simple_route.http_method || "ANY";
+                        matchConditions.push(`Method: ${httpMethod}`);
 
                         if (route.simple_route.path?.prefix) {
-                            matchConditions.push(`Path Match: ${route.simple_route.path.prefix}`);
+                            matchConditions.push(`Path Match: ${escapeForMermaid(route.simple_route.path.prefix)}`);
                         } else if (route.simple_route.path?.regex) {
-                            matchConditions.push(`Path Regex: ${route.simple_route.path.regex}`);
+                            matchConditions.push(`Path Regex: ${escapeForMermaid(route.simple_route.path.regex)}`);
                         }
 
                         route.simple_route.headers?.forEach(header => {
                             if (header.regex) {
-                                matchConditions.push(`Header Regex: ${header.name} ~ ${header.regex}`);
+                                matchConditions.push(`Header Regex: ${header.name} ~ ${escapeForMermaid(header.regex)}`);
                             }
                             else if (header.exact) {
-                                matchConditions.push(`Header Exact: ${header.name} = ${header.exact}`);
+                                matchConditions.push(`Header Exact: ${header.name} = ${escapeForMermaid(header.exact)}`);
                             } else {
                                 matchConditions.push(`Header Match: ${header.name}`);
                             }
@@ -2279,27 +2332,71 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                     } else if (route.redirect_route) {
                         const nodeID = `redirect_${i}`;
                         const matchConditionsRedirect = [];
-                        const redirectTarget = `${route.redirect_route.route_redirect.host_redirect}${route.redirect_route.route_redirect.path_redirect}`;
+                        const redirectTarget = `${route.redirect_route.route_redirect.host_redirect}${route.redirect_route.route_redirect.path_redirect || ''}`;
+
+                        // Escape the redirect target to prevent Mermaid from interpreting as markdown link
+                        let escapedRedirectTarget = escapeForMermaid(redirectTarget);
 
                         route.redirect_route.headers?.forEach(header => {
                             if (header.regex) {
-                                matchConditionsRedirect.push(`Header Regex: ${header.name} ~ ${header.regex}`);
+                                matchConditionsRedirect.push(`Header Regex: ${header.name} ~ ${escapeForMermaid(header.regex)}`);
                             } else if (header.exact) {
-                                matchConditionsRedirect.push(`Header Exact: ${header.name} = ${header.exact}`);
+                                matchConditionsRedirect.push(`Header Exact: ${header.name} = ${escapeForMermaid(header.exact)}`);
                             } else {
                                 matchConditionsRedirect.push(`Header Match: ${header.name}`);
                             }
                         });
-                        const pathDisplay = route.redirect_route.path?.prefix ? `Path: ${route.redirect_route.path.prefix}<br>` : '';
-                        diagram += `    ${nodeID}["**Redirect Route**<br>${pathDisplay}${matchConditionsRedirect}"];\n`;
+                        const httpMethod = route.redirect_route.http_method || "ANY";
+                        const methodDisplay = `Method: ${httpMethod}<br>`;
+                        const pathDisplay = (route.redirect_route.path?.prefix || route.redirect_route.path?.path) ? `Path: ${escapeForMermaid(route.redirect_route.path?.prefix || route.redirect_route.path?.path)}<br>` : '';
+                        diagram += `    ${nodeID}["**Redirect Route ${i + 1}**<br>${methodDisplay}${pathDisplay}${matchConditionsRedirect}"];\n`;
                         diagram += `    class ${nodeID} route_${routeType};\n`;
                         const redirectEdgeId = `rde${edges}`;
                         diagram += `    Routes ${redirectEdgeId}@--> ${nodeID};\n`;
                         diagram += `    class ${redirectEdgeId} routeLine_${routeType};\n`;
                         edges++;
                         const targetEdgeId = `te${edges}`;
-                        diagram += `    ${nodeID} ${targetEdgeId}@-->|Redirects to| redirect_target_${i}["${redirectTarget}"];\n`;
+                        diagram += `    ${nodeID} ${targetEdgeId}@-->|Redirects to| redirect_target_${i}["${escapedRedirectTarget}"];\n`;
                         diagram += `    class ${targetEdgeId} routeLine_${routeType};\n`;
+                        edges++;
+                    } else if (route.direct_response_route) {
+                        const nodeID = `direct_response_${i}`;
+                        const httpMethod = route.direct_response_route.http_method || "ANY";
+                        const methodDisplay = `Method: ${httpMethod}<br>`;
+                        const pathDisplay = route.direct_response_route.path?.prefix ? `Path: ${escapeForMermaid(route.direct_response_route.path.prefix)}<br>` : '';
+                        const responseInfo = `Response Code: ${route.direct_response_route.route_direct_response.response_code}<br>Body: ${route.direct_response_route.route_direct_response.response_body || 'Empty'}`;
+
+                        diagram += `    ${nodeID}["**Direct Response ${i + 1}**<br>${methodDisplay}${pathDisplay}${responseInfo}"];\n`;
+                        diagram += `    class ${nodeID} route_${routeType};\n`;
+                        const directEdgeId = `dre${edges}`;
+                        diagram += `    Routes ${directEdgeId}@--> ${nodeID};\n`;
+                        diagram += `    class ${directEdgeId} routeLine_${routeType};\n`;
+                        edges++;
+                    } else if (route.custom_route_object) {
+                        const nodeID = `custom_route_${i}`;
+                        const routeRef = route.custom_route_object.route_ref;
+                        let customRouteLabel = `**Custom Route ${i + 1}**`;
+                        if (routeRef) {
+                            customRouteLabel += `<br>Reference: ${routeRef.name || 'Unknown'}`;
+                            if (routeRef.namespace) {
+                                customRouteLabel += `<br>Namespace: ${routeRef.namespace}`;
+                            }
+                        }
+
+                        diagram += `    ${nodeID}["${customRouteLabel}"];\n`;
+                        diagram += `    class ${nodeID} route_${routeType};\n`;
+                        const customEdgeId = `cre${edges}`;
+                        diagram += `    Routes ${customEdgeId}@--> ${nodeID};\n`;
+                        diagram += `    class ${customEdgeId} routeLine_${routeType};\n`;
+                        edges++;
+                    } else {
+                        // Handle any other unknown route types
+                        const nodeID = `unknown_route_${i}`;
+                        diagram += `    ${nodeID}["**Unknown Route ${i + 1}**"];\n`;
+                        diagram += `    class ${nodeID} route_default;\n`;
+                        const unknownEdgeId = `ure${edges}`;
+                        diagram += `    Routes ${unknownEdgeId}@--> ${nodeID};\n`;
+                        diagram += `    class ${unknownEdgeId} routeLine_default;\n`;
                         edges++;
                     }
                 });
@@ -2327,7 +2424,7 @@ async function generateMermaidDiagramEnhanced(lb, originPoolsData = [], baseUrl 
                             const cdnNodeId = `cdn_front_${sanitize(cdn.name)}`;
                             const cdnDomains = cdn.get_spec?.domains || [];
                             // Escape domain names to prevent Mermaid syntax errors and URL encoding issues
-                            const escapedDomains = cdnDomains.map(d => d ? d.replace(/[<>\"'&%]/g, '') : '').join(', ');
+                            const escapedDomains = cdnDomains.map(d => escapeForMermaid(d ? d.replace(/[<>\"'&%]/g, '') : '')).join(', ');
                             const escapedCDNName = cdn.name ? cdn.name.replace(/[<>\"'&%]/g, '') : 'Unknown CDN';
 
                             diagram += `\n    %% CDN in front of Load Balancer\n`;
